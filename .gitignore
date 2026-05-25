@@ -1,0 +1,55 @@
+# macOS / editor noise
+.DS_Store
+*.swp
+*.swo
+*.tmp
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and package manager caches
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+
+# Python caches and virtualenvs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# HyperFrames / browser / build caches
+.hyperframes/
+.waveform-cache/
+.cache/
+dist/
+build/
+coverage/
+
+# Local QA/reference captures
+verify/
+reference/
+*.bak
+
+# Generated daily video outputs.
+# Keep automation source committed; regenerate daily projects/renders in CI.
+daily/
+renders/
+
+# Large generated media assets. Keep the required source music file.
+assets/narration*.wav
+assets/*_heroic.wav
+assets/background_music_*.mp3
+assets/background_music_*.wav
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1080px;
+        height: 1920px;
+        overflow: hidden;
+        background: #070302;
+        font-family: sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 1080px;
+        height: 1920px;
+        overflow: hidden;
+        background: #070302;
+        color: #fff;
+      }
+      .clip { position: absolute; inset: 0; overflow: hidden; }
+      .scene img {
+        position: absolute;
+        inset: -108px;
+        width: calc(100% + 216px);
+        height: calc(100% + 216px);
+        object-fit: cover;
+        filter: contrast(1.32) saturate(1.75) sepia(0.24);
+        transform-origin: center;
+      }
+      .scene::before {
+        content: "";
+        position: absolute;
+        z-index: 2;
+        inset: 0;
+        background:
+          radial-gradient(circle at 28% 16%, rgba(255, 224, 68, 0.45), transparent 28%),
+          radial-gradient(circle at 82% 72%, rgba(221, 23, 17, 0.48), transparent 40%),
+          linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.18) 44%, rgba(0,0,0,0.74) 100%);
+        mix-blend-mode: overlay;
+        pointer-events: none;
+      }
+      .scene::after {
+        content: "";
+        position: absolute;
+        z-index: 3;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at center, transparent 34%, rgba(0,0,0,0.76) 100%),
+          repeating-linear-gradient(0deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 5px);
+        opacity: 0.82;
+        pointer-events: none;
+      }
+      .top-bug {
+        position: absolute;
+        z-index: 12;
+        top: 52px;
+        left: 54px;
+        padding: 12px 18px;
+        border-radius: 7px;
+        background: rgba(20, 6, 10, 0.62);
+        color: rgba(255, 230, 148, 0.94);
+        font-size: 28px;
+        font-weight: 950;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        box-shadow: 0 12px 34px rgba(0,0,0,0.4);
+      }
+      .hook {
+        position: absolute;
+        z-index: 22;
+        top: auto;
+        left: 50px;
+        right: 50px;
+        bottom: 330px;
+        height: 310px;
+        color: #fff8e7;
+        font-size: 88px;
+        font-weight: 950;
+        line-height: 0.96;
+        text-align: center;
+        text-transform: uppercase;
+        text-shadow:
+          0 4px 0 rgba(142, 12, 26, 0.96),
+          0 22px 50px rgba(0,0,0,0.78);
+      }
+      .hook em {
+        display: block;
+        color: #ffdd57;
+        font-style: normal;
+      }
+      .subtitle {
+        position: absolute;
+        z-index: 20;
+        left: 0;
+        right: 0;
+        bottom: 78px;
+        height: 250px;
+        overflow: visible;
+        display: flex;
+        justify-content: center;
+        align-items: flex-end;
+        pointer-events: none;
+      }
+      .subtitle span {
+        position: absolute;
+        left: 44px;
+        right: 44px;
+        bottom: 0;
+        display: block;
+        max-width: 992px;
+        margin: 0 auto;
+        padding: 22px 30px 25px;
+        border: 4px solid rgba(224, 57, 137, 0.78);
+        border-radius: 9px;
+        background: rgba(24, 8, 28, 0.9);
+        color: #fff5ff;
+        font-size: 48px;
+        font-weight: 950;
+        line-height: 1.06;
+        text-align: center;
+        text-shadow:
+          0 2px 0 rgba(255, 71, 159, 0.65),
+          0 5px 14px rgba(0,0,0,0.88);
+        box-shadow:
+          0 0 0 2px rgba(255,255,255,0.08),
+          0 20px 52px rgba(0,0,0,0.56);
+      }
+      .grain {
+        position: absolute;
+        z-index: 10;
+        inset: 0;
+        opacity: 0.14;
+        background-image:
+          repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 3px),
+          repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 6px);
+        mix-blend-mode: soft-light;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="43" data-width="1080" data-height="1920">
+      <div id="scene-1" class="clip scene" data-start="0" data-duration="6.1" data-track-index="0">
+        <img src="assets/internet/sunzi_author.jpg" data-layout-allow-overflow alt="" />
+      </div>
+      <div id="scene-2" class="clip scene" data-start="6.1" data-duration="6.0" data-track-index="0">
+        <img src="assets/internet/battle_oroi.jpg" data-layout-allow-overflow alt="" />
+      </div>
+      <div id="scene-3" class="clip scene" data-start="12.1" data-duration="6.2" data-track-index="0">
+        <img src="assets/internet/guan_yu_capture.jpg" data-layout-allow-overflow alt="" />
+      </div>
+      <div id="scene-4" class="clip scene" data-start="18.3" data-duration="6.1" data-track-index="0">
+        <img src="assets/internet/han_battle.jpg" data-layout-allow-overflow alt="" />
+      </div>
+      <div id="scene-5" class="clip scene" data-start="24.4" data-duration="6.1" data-track-index="0">
+        <img src="assets/internet/battle_oroi_alt.jpg" data-layout-allow-overflow alt="" />
+      </div>
+      <div id="scene-6" class="clip scene" data-start="30.5" data-duration="6.2" data-track-index="0">
+        <img src="assets/internet/art_of_war_commentaries.jpg" data-layout-allow-overflow alt="" />
+      </div>
+      <div id="scene-7" class="clip scene" data-start="36.7" data-duration="6.3" data-track-index="0">
+        <img src="assets/internet/guan_yu_capture_alt.jpg" data-layout-allow-overflow alt="" />
+      </div>
+
+      <div class="grain" data-layout-ignore></div>
+      <div class="top-bug">Chương VI / Mạnh và yếu</div>
+
+      <div id="hero-hook" class="clip hook" data-start="0" data-duration="3" data-track-index="1">
+        Đánh vào<em>chỗ yếu</em>
+      </div>
+
+      <div id="subtitles" class="clip subtitle" data-start="3" data-duration="40" data-track-index="1" data-layout-allow-overflow>
+        <span id="cap-1">Đừng lao vào nơi đối thủ mạnh nhất.</span>
+        <span id="cap-2">Hãy tìm điểm họ không phòng thủ.</span>
+        <span id="cap-3">Điểm họ chủ quan. Điểm họ không kịp trở tay.</span>
+        <span id="cap-4">Đừng tranh cãi với người chỉ muốn thắng.</span>
+        <span id="cap-5">Đừng cạnh tranh ở nơi ai cũng chen vào.</span>
+        <span id="cap-6">Nếu họ mạnh về tiền, hãy thắng bằng tốc độ.</span>
+        <span id="cap-7">Nếu họ mạnh về tiếng ồn, hãy thắng bằng sự chính xác.</span>
+        <span id="cap-8">Đừng cố phá bức tường dày nhất.</span>
+        <span id="cap-9">Hãy tìm cánh cửa chưa ai nhìn thấy.</span>
+        <span id="cap-10">Chiến lược là chọn đúng điểm để tung một đòn đủ mạnh.</span>
+      </div>
+
+      <audio id="narration" data-start="0" data-duration="43" data-track-index="2" src="assets/narration_weak_strong_heroic.wav" data-volume="1"></audio>
+      <audio id="music" data-start="0" data-duration="43" data-track-index="3" src="assets/background_music_45s.mp3" data-volume="1"></audio>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      tl.fromTo("#scene-1 img", { scale: 1.46, x: -130, y: 0 }, { scale: 1.72, x: 130, y: -90, duration: 6.1, ease: "sine.inOut" }, 0);
+      tl.fromTo("#scene-2 img", { scale: 1.52, x: 190, y: -30 }, { scale: 1.82, x: -220, y: 100, duration: 6.0, ease: "sine.inOut" }, 6.1);
+      tl.fromTo("#scene-3 img", { scale: 1.8, x: -170, y: 20 }, { scale: 2.05, x: 160, y: -90, duration: 6.2, ease: "sine.inOut" }, 12.1);
+      tl.fromTo("#scene-4 img", { scale: 1.58, x: 210, y: 110 }, { scale: 1.88, x: -190, y: -100, duration: 6.1, ease: "sine.inOut" }, 18.3);
+      tl.fromTo("#scene-5 img", { scale: 1.72, x: -230, y: -60 }, { scale: 1.98, x: 170, y: 110, duration: 6.1, ease: "sine.inOut" }, 24.4);
+      tl.fromTo("#scene-6 img", { scale: 1.45, x: 160, y: 0 }, { scale: 1.7, x: -170, y: -80, duration: 6.2, ease: "sine.inOut" }, 30.5);
+      tl.fromTo("#scene-7 img", { scale: 1.78, x: 150, y: -40 }, { scale: 2.06, x: -180, y: 120, duration: 6.3, ease: "sine.inOut" }, 36.7);
+
+      tl.from(".top-bug", { opacity: 0, y: -18, duration: 0.36, ease: "power2.out" }, 0.2);
+      tl.to(".top-bug", { opacity: 0, duration: 0.3, ease: "power2.in" }, 3.5);
+      tl.from("#hero-hook", { opacity: 0, y: 80, scale: 0.92, duration: 0.35, ease: "back.out(1.8)" }, 0.28);
+      tl.to("#hero-hook", { opacity: 0, y: -32, filter: "blur(10px)", duration: 0.26, ease: "power2.in" }, 2.7);
+      tl.set("#hero-hook", { opacity: 0 }, 3.0);
+
+      const captionBeats = [
+        ["#cap-1", 3.0, 4.0],
+        ["#cap-2", 7.0, 4.0],
+        ["#cap-3", 11.0, 4.5],
+        ["#cap-4", 15.5, 4.0],
+        ["#cap-5", 19.5, 4.0],
+        ["#cap-6", 23.5, 4.3],
+        ["#cap-7", 27.8, 4.4],
+        ["#cap-8", 32.2, 3.6],
+        ["#cap-9", 35.8, 3.2],
+        ["#cap-10", 39.0, 3.7]
+      ];
+
+      gsap.set(".subtitle span", { opacity: 0, y: 32, scale: 0.96 });
+      for (const [selector, start, duration] of captionBeats) {
+        tl.fromTo(selector, { opacity: 0, y: 32, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.2, ease: "power2.out" }, start + 0.03);
+        tl.to(selector, { opacity: 0, y: 14, duration: 0.17, ease: "power2.in" }, start + duration - 0.18);
+      }
+
+      tl.to("#root", { filter: "saturate(1.08) contrast(1.05)", duration: 0.001 }, 0);
+      tl.to("#root", { opacity: 0, duration: 0.35, ease: "power2.in" }, 42.65);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "sun-tzu-viral-916",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.6.40 preview",
+    "check": "npx --yes hyperframes@0.6.40 lint && npx --yes hyperframes@0.6.40 validate && npx --yes hyperframes@0.6.40 inspect",
+    "daily:generate": "node automation/generate-daily-videos.mjs",
+    "daily:publish": "node automation/publish-social.mjs",
+    "render": "npx --yes hyperframes@0.6.40 render",
+    "publish": "npx --yes hyperframes@0.6.40 publish"
+  }
+}

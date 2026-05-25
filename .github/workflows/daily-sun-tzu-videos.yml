@@ -1,0 +1,139 @@
+name: Ancient Wisdom Short Videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_date:
+        description: "YYYY-MM-DD seed date. Defaults to current UTC date."
+        required: false
+        type: string
+      publish:
+        description: "Publish to social platforms after rendering. Requires secrets."
+        required: false
+        default: false
+        type: boolean
+      run_slot:
+        description: "Daily run slot: 1-8. Defaults from schedule time."
+        required: false
+        type: string
+  schedule:
+    # Every 3 hours in Asia/Ho_Chi_Minh: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00.
+    - cron: "0 2,5,8,11,14,17,20,23 * * *"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python video packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install vieneu rembg pillow opencv-python-headless numpy
+
+      - name: Generate daily project folders
+        env:
+          VIDEO_DATE: ${{ inputs.video_date }}
+          RUN_SLOT: ${{ inputs.run_slot }}
+          PYTHON_BIN: python
+          VIENEU_VOICE: Tuyen
+          ENABLE_SUBJECT_OUTLINE: "true"
+          ENABLE_SUBJECT_LAYERS: "true"
+          SUBJECT_MODEL: isnet-general-use
+          SUBJECT_MIN_AREA_RATIO: "0.015"
+          SUBJECT_LAYER_OPACITY: "0.92"
+          SUBJECT_SHADOW_OPACITY: "0.38"
+          SUBJECT_DEPTH_PUSH: "34"
+        run: node automation/generate-daily-videos.mjs
+
+      - name: Resolve daily slot
+        id: slot
+        env:
+          INPUT_VIDEO_DATE: ${{ inputs.video_date }}
+          INPUT_RUN_SLOT: ${{ inputs.run_slot }}
+        run: |
+          set -euo pipefail
+          VIDEO_DATE="$INPUT_VIDEO_DATE"
+          if [ -z "$VIDEO_DATE" ]; then VIDEO_DATE="$(TZ=Asia/Ho_Chi_Minh date +%F)"; fi
+          RUN_SLOT="$INPUT_RUN_SLOT"
+          if [ -z "$RUN_SLOT" ]; then
+            case "$(date -u +%H)" in
+              17) RUN_SLOT="1" ;;
+              20) RUN_SLOT="2" ;;
+              23) RUN_SLOT="3" ;;
+              02) RUN_SLOT="4" ;;
+              05) RUN_SLOT="5" ;;
+              08) RUN_SLOT="6" ;;
+              11) RUN_SLOT="7" ;;
+              14) RUN_SLOT="8" ;;
+              *) RUN_SLOT="1" ;;
+            esac
+          fi
+          echo "video_date=$VIDEO_DATE" >> "$GITHUB_OUTPUT"
+          echo "run_slot=$RUN_SLOT" >> "$GITHUB_OUTPUT"
+          echo "date_dir=daily/$VIDEO_DATE/slot-$RUN_SLOT" >> "$GITHUB_OUTPUT"
+
+      - name: Render generated video
+        run: |
+          set -euo pipefail
+          DATE_DIR="${{ steps.slot.outputs.date_dir }}"
+          mkdir -p "$DATE_DIR/renders"
+          for dir in "$DATE_DIR"/*/; do
+            [ -f "$dir/index.html" ] || continue
+            echo "Rendering $dir"
+            (cd "$dir" && npx --yes hyperframes@0.6.40 lint && npx --yes hyperframes@0.6.40 validate && npx --yes hyperframes@0.6.40 inspect --samples 12)
+            (cd "$dir" && npx --yes hyperframes@0.6.40 render --output "../renders/$(basename "$dir").mp4" --quality high --fps 30)
+          done
+
+      - name: Publish social videos
+        if: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+        env:
+          VIDEO_DATE: ${{ steps.slot.outputs.video_date }}
+          RUN_SLOT: ${{ steps.slot.outputs.run_slot }}
+          ENABLE_SOCIAL_PUBLISH: ${{ secrets.ENABLE_SOCIAL_PUBLISH }}
+          PUBLISH_DRY_RUN: ${{ secrets.PUBLISH_DRY_RUN }}
+          PUBLISH_PLATFORMS: ${{ secrets.PUBLISH_PLATFORMS }}
+          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          TIKTOK_PRIVACY_LEVEL: ${{ secrets.TIKTOK_PRIVACY_LEVEL }}
+          TIKTOK_DISABLE_DUET: ${{ secrets.TIKTOK_DISABLE_DUET }}
+          TIKTOK_DISABLE_COMMENT: ${{ secrets.TIKTOK_DISABLE_COMMENT }}
+          TIKTOK_DISABLE_STITCH: ${{ secrets.TIKTOK_DISABLE_STITCH }}
+          TIKTOK_BRAND_CONTENT_TOGGLE: ${{ secrets.TIKTOK_BRAND_CONTENT_TOGGLE }}
+          TIKTOK_BRAND_ORGANIC_TOGGLE: ${{ secrets.TIKTOK_BRAND_ORGANIC_TOGGLE }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_PRIVACY_STATUS: ${{ secrets.YOUTUBE_PRIVACY_STATUS }}
+          YOUTUBE_CATEGORY_ID: ${{ secrets.YOUTUBE_CATEGORY_ID }}
+          FACEBOOK_GRAPH_VERSION: ${{ secrets.FACEBOOK_GRAPH_VERSION }}
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+        run: node automation/publish-social.mjs
+
+      - name: Upload video artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ancient-wisdom-short-videos
+          path: |
+            daily/**/slot-*/renders/*.mp4
+            daily/**/slot-*/manifest.json
+            daily/**/slot-*/*/post.json
+            daily/**/slot-*/*/*sources*.json
+          retention-days: 14
