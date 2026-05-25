@@ -1,4 +1,4 @@
-name: Ancient Wisdom Short Videos
+name: Ancient Wisdom Short Videos 1
 
 on:
   workflow_dispatch:
