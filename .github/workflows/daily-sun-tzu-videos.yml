@@ -13,7 +13,7 @@ on:
         default: false
         type: boolean
       run_slot:
-        description: "Daily run slot: 1-8. Defaults from schedule time."
+        description: "Daily run slot: 1-8. Manual runs default from current Asia/Ho_Chi_Minh 3-hour block."
         required: false
         type: string
   schedule:
@@ -68,20 +68,11 @@ jobs:
                   ;;
               esac
             else
-              case "$(date -u +%H)" in
-                17) RUN_SLOT="1" ;;
-                20) RUN_SLOT="2" ;;
-                23) RUN_SLOT="3" ;;
-                02) RUN_SLOT="4" ;;
-                05) RUN_SLOT="5" ;;
-                08) RUN_SLOT="6" ;;
-                11) RUN_SLOT="7" ;;
-                14) RUN_SLOT="8" ;;
-                *)
-                  echo "RUN_SLOT was not provided and current UTC hour is not a scheduled slot." >&2
-                  exit 1
-                  ;;
-              esac
+              ICT_HOUR="$(TZ=Asia/Ho_Chi_Minh date +%H)"
+              RUN_SLOT="$((10#$ICT_HOUR / 3 + 1))"
+              if [ "$RUN_SLOT" -gt 8 ]; then
+                RUN_SLOT="8"
+              fi
             fi
           fi
 
