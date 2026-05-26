@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_date:
-        description: "YYYY-MM-DD seed date. Defaults to current UTC date."
+        description: "YYYY-MM-DD seed date. Defaults to current Asia/Ho_Chi_Minh date."
         required: false
         type: string
       publish:
@@ -18,7 +18,14 @@ on:
         type: string
   schedule:
     # Every 3 hours in Asia/Ho_Chi_Minh: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00.
-    - cron: "0 2,5,8,11,14,17,20,23 * * *"
+    - cron: "0 17 * * *"
+    - cron: "0 20 * * *"
+    - cron: "0 23 * * *"
+    - cron: "0 2 * * *"
+    - cron: "0 5 * * *"
+    - cron: "0 8 * * *"
+    - cron: "0 11 * * *"
+    - cron: "0 14 * * *"
 
 jobs:
   generate:
@@ -27,6 +34,68 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve daily slot
+        id: slot
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_VIDEO_DATE: ${{ inputs.video_date }}
+          INPUT_RUN_SLOT: ${{ inputs.run_slot }}
+        run: |
+          set -euo pipefail
+
+          VIDEO_DATE="$INPUT_VIDEO_DATE"
+          if [ -z "$VIDEO_DATE" ]; then
+            VIDEO_DATE="$(TZ=Asia/Ho_Chi_Minh date +%F)"
+          fi
+
+          RUN_SLOT="$INPUT_RUN_SLOT"
+          if [ -z "$RUN_SLOT" ]; then
+            if [ "$EVENT_NAME" = "schedule" ]; then
+              case "$EVENT_SCHEDULE" in
+                "0 17 * * *") RUN_SLOT="1" ;;
+                "0 20 * * *") RUN_SLOT="2" ;;
+                "0 23 * * *") RUN_SLOT="3" ;;
+                "0 2 * * *") RUN_SLOT="4" ;;
+                "0 5 * * *") RUN_SLOT="5" ;;
+                "0 8 * * *") RUN_SLOT="6" ;;
+                "0 11 * * *") RUN_SLOT="7" ;;
+                "0 14 * * *") RUN_SLOT="8" ;;
+                *)
+                  echo "Unable to map scheduled cron to RUN_SLOT: $EVENT_SCHEDULE" >&2
+                  exit 1
+                  ;;
+              esac
+            else
+              case "$(date -u +%H)" in
+                17) RUN_SLOT="1" ;;
+                20) RUN_SLOT="2" ;;
+                23) RUN_SLOT="3" ;;
+                02) RUN_SLOT="4" ;;
+                05) RUN_SLOT="5" ;;
+                08) RUN_SLOT="6" ;;
+                11) RUN_SLOT="7" ;;
+                14) RUN_SLOT="8" ;;
+                *)
+                  echo "RUN_SLOT was not provided and current UTC hour is not a scheduled slot." >&2
+                  exit 1
+                  ;;
+              esac
+            fi
+          fi
+
+          case "$RUN_SLOT" in
+            1|2|3|4|5|6|7|8) ;;
+            *)
+              echo "RUN_SLOT must be 1-8. Received: $RUN_SLOT" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "video_date=$VIDEO_DATE" >> "$GITHUB_OUTPUT"
+          echo "run_slot=$RUN_SLOT" >> "$GITHUB_OUTPUT"
+          echo "date_dir=daily/$VIDEO_DATE/slot-$RUN_SLOT" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -50,8 +119,8 @@ jobs:
 
       - name: Generate daily project folders
         env:
-          VIDEO_DATE: ${{ inputs.video_date }}
-          RUN_SLOT: ${{ inputs.run_slot }}
+          VIDEO_DATE: ${{ steps.slot.outputs.video_date }}
+          RUN_SLOT: ${{ steps.slot.outputs.run_slot }}
           PYTHON_BIN: python
           VIENEU_VOICE: Tuyen
           ENABLE_SUBJECT_OUTLINE: "true"
@@ -62,33 +131,6 @@ jobs:
           SUBJECT_SHADOW_OPACITY: "0.38"
           SUBJECT_DEPTH_PUSH: "34"
         run: node automation/generate-daily-videos.mjs
-
-      - name: Resolve daily slot
-        id: slot
-        env:
-          INPUT_VIDEO_DATE: ${{ inputs.video_date }}
-          INPUT_RUN_SLOT: ${{ inputs.run_slot }}
-        run: |
-          set -euo pipefail
-          VIDEO_DATE="$INPUT_VIDEO_DATE"
-          if [ -z "$VIDEO_DATE" ]; then VIDEO_DATE="$(TZ=Asia/Ho_Chi_Minh date +%F)"; fi
-          RUN_SLOT="$INPUT_RUN_SLOT"
-          if [ -z "$RUN_SLOT" ]; then
-            case "$(date -u +%H)" in
-              17) RUN_SLOT="1" ;;
-              20) RUN_SLOT="2" ;;
-              23) RUN_SLOT="3" ;;
-              02) RUN_SLOT="4" ;;
-              05) RUN_SLOT="5" ;;
-              08) RUN_SLOT="6" ;;
-              11) RUN_SLOT="7" ;;
-              14) RUN_SLOT="8" ;;
-              *) RUN_SLOT="1" ;;
-            esac
-          fi
-          echo "video_date=$VIDEO_DATE" >> "$GITHUB_OUTPUT"
-          echo "run_slot=$RUN_SLOT" >> "$GITHUB_OUTPUT"
-          echo "date_dir=daily/$VIDEO_DATE/slot-$RUN_SLOT" >> "$GITHUB_OUTPUT"
 
       - name: Render generated video
         run: |
@@ -110,13 +152,9 @@ jobs:
           ENABLE_SOCIAL_PUBLISH: ${{ secrets.ENABLE_SOCIAL_PUBLISH }}
           PUBLISH_DRY_RUN: ${{ secrets.PUBLISH_DRY_RUN }}
           PUBLISH_PLATFORMS: ${{ secrets.PUBLISH_PLATFORMS }}
-          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
-          TIKTOK_PRIVACY_LEVEL: ${{ secrets.TIKTOK_PRIVACY_LEVEL }}
-          TIKTOK_DISABLE_DUET: ${{ secrets.TIKTOK_DISABLE_DUET }}
-          TIKTOK_DISABLE_COMMENT: ${{ secrets.TIKTOK_DISABLE_COMMENT }}
-          TIKTOK_DISABLE_STITCH: ${{ secrets.TIKTOK_DISABLE_STITCH }}
-          TIKTOK_BRAND_CONTENT_TOGGLE: ${{ secrets.TIKTOK_BRAND_CONTENT_TOGGLE }}
-          TIKTOK_BRAND_ORGANIC_TOGGLE: ${{ secrets.TIKTOK_BRAND_ORGANIC_TOGGLE }}
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_REFRESH_TOKEN: ${{ secrets.TIKTOK_REFRESH_TOKEN }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}

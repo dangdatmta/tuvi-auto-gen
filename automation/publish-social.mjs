@@ -65,12 +65,6 @@ function required(name) {
   return value;
 }
 
-function boolEnv(name, fallback = false) {
-  const value = process.env[name];
-  if (value == null || value === "") return fallback;
-  return value === "true" || value === "1";
-}
-
 function captionForPlatform(post, platform) {
   return post.captions?.[platform] || post.caption || post.title || "";
 }
@@ -94,6 +88,36 @@ async function binaryFetch(url, options = {}) {
   return text;
 }
 
+let tiktokAccessTokenPromise;
+
+async function getTikTokAccessToken() {
+  if (!tiktokAccessTokenPromise) {
+    tiktokAccessTokenPromise = refreshTikTokAccessToken();
+  }
+  return tiktokAccessTokenPromise;
+}
+
+async function refreshTikTokAccessToken() {
+  const currentRefreshToken = required("TIKTOK_REFRESH_TOKEN");
+  const body = new URLSearchParams({
+    client_key: required("TIKTOK_CLIENT_KEY"),
+    client_secret: required("TIKTOK_CLIENT_SECRET"),
+    grant_type: "refresh_token",
+    refresh_token: currentRefreshToken,
+  });
+  const data = await jsonFetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!data.access_token) throw new Error(`TikTok token refresh did not return access_token: ${JSON.stringify(data)}`);
+  if (data.refresh_token && data.refresh_token !== currentRefreshToken) {
+    process.env.TIKTOK_REFRESH_TOKEN = data.refresh_token;
+    console.warn("TikTok returned a rotated refresh token. Update the TIKTOK_REFRESH_TOKEN secret before the next run.");
+  }
+  return data.access_token;
+}
+
 async function discoverJobs() {
   if (!existsSync(dateDir)) throw new Error(`Missing daily output directory: ${dateDir}`);
   const manifestPath = path.join(dateDir, "manifest.json");
@@ -112,25 +136,15 @@ async function discoverJobs() {
 }
 
 async function publishTikTok(job, post) {
-  const accessToken = required("TIKTOK_ACCESS_TOKEN");
-  const caption = captionForPlatform(post, "tiktok");
+  const accessToken = await getTikTokAccessToken();
   const video = await readFile(job.videoPath);
-  const init = await jsonFetch("https://open.tiktokapis.com/v2/post/publish/video/init/", {
+  const init = await jsonFetch("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
     method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
       "content-type": "application/json; charset=UTF-8",
     },
     body: JSON.stringify({
-      post_info: {
-        title: caption.slice(0, 2200),
-        privacy_level: process.env.TIKTOK_PRIVACY_LEVEL || "PUBLIC_TO_EVERYONE",
-        disable_duet: boolEnv("TIKTOK_DISABLE_DUET"),
-        disable_comment: boolEnv("TIKTOK_DISABLE_COMMENT"),
-        disable_stitch: boolEnv("TIKTOK_DISABLE_STITCH"),
-        brand_content_toggle: boolEnv("TIKTOK_BRAND_CONTENT_TOGGLE"),
-        brand_organic_toggle: boolEnv("TIKTOK_BRAND_ORGANIC_TOGGLE"),
-      },
       source_info: {
         source: "FILE_UPLOAD",
         video_size: video.byteLength,
@@ -154,7 +168,7 @@ async function publishTikTok(job, post) {
     body: video,
   });
 
-  return { platform: "tiktok", publishId };
+  return { platform: "tiktok", mode: "draft", publishId };
 }
 
 async function getYouTubeAccessToken() {
