@@ -132,7 +132,7 @@ jobs:
             [ -f "$dir/index.html" ] || continue
             echo "Rendering $dir"
             (cd "$dir" && npx --yes hyperframes@0.6.40 lint && npx --yes hyperframes@0.6.40 validate && npx --yes hyperframes@0.6.40 inspect --samples 12)
-            (cd "$dir" && npx --yes hyperframes@0.6.40 render --output "../renders/$(basename "$dir").mp4" --quality high --fps 30)
+            (cd "$dir" && npx --yes hyperframes@0.6.40 render --output "../renders/$(basename "$dir").mp4" --quality standard --fps 24 --workers 1 --max-concurrent-renders 1 --video-bitrate 10M)
           done
 
       - name: Publish social videos
