@@ -344,15 +344,6 @@ async function downloadLessonImages(lesson, dir) {
   return sources;
 }
 
-function narrationText(lesson) {
-  return [
-    `${lesson.sourceTitlePrefix}, chương ${lesson.chapter}, nói về ${lesson.viTitle.toLowerCase()}.`,
-    lesson.angle,
-    ...lesson.beats.slice(0, 7),
-    `Nhớ lấy: ${lesson.takeaway}`,
-  ].join(" ");
-}
-
 function fallbackQueriesForLesson(lesson) {
   const shared = [
     "Chinese bamboo slips museum",
@@ -417,6 +408,82 @@ function uniqueList(items) {
   return [...new Set(items.filter(Boolean))];
 }
 
+function variantSeed(lesson, purpose = "copy") {
+  return `${date}|${slot}|${lesson.sourceAuthor}|${lesson.sourceWork}|${lesson.chapter}|${lesson.title}|${purpose}`;
+}
+
+function pickVariant(items, lesson, purpose = "copy", offset = 0) {
+  if (!items.length) return "";
+  return items[(hashDate(variantSeed(lesson, purpose)) + offset) % items.length];
+}
+
+function lowerFirst(text) {
+  const value = String(text || "").trim();
+  if (!value) return "";
+  return value.charAt(0).toLocaleLowerCase("vi") + value.slice(1);
+}
+
+function ensureSentence(text) {
+  const value = String(text || "").trim();
+  if (!value) return "";
+  return /[.!?…]$/.test(value) ? value : `${value}.`;
+}
+
+function auditHumanCopy(text) {
+  return String(text || "")
+    .replace(/Bài học hôm nay:\s*/gi, "")
+    .replace(/Comment\s+"CỔ NHÂN"\s+nếu muốn phần tiếp theo\./gi, "Lưu lại nếu bạn cần một câu nhắc mình trước khi quyết định.")
+    .replace(/\b(cực kỳ|vô cùng)\s+/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function sourceCredit(lesson) {
+  return `${lesson.sourceAuthor}, ${lesson.sourceWork}, chương ${lesson.chapter}: ${lesson.viTitle}`;
+}
+
+function narrationText(lesson) {
+  const opening = pickVariant([
+    `${lesson.hook} nghe giống một câu khẩu hiệu. Nhưng đặt vào đời thật, nó là một cách tránh sai lầm rất đắt.`,
+    `Có những lúc mình thua không phải vì yếu hơn. Mình thua vì phản ứng quá nhanh, hoặc quá chậm.`,
+    `Bài này không nằm trên chiến trường xa xưa. Nó nằm trong một quyết định bạn có thể gặp ngay hôm nay.`,
+    `Một câu cổ nghe qua tưởng đơn giản. Đến lúc va vào việc thật mới thấy nó sắc.`,
+  ], lesson, "narration-opening");
+
+  const sourceLine = pickVariant([
+    `${lesson.sourceAuthor} chạm vào ý đó trong ${lesson.sourceWork}, chương ${lesson.chapter}, phần ${lesson.viTitle.toLowerCase()}.`,
+    `Trong ${lesson.sourceWork}, chương ${lesson.chapter}, ${lesson.sourceAuthor} gọi trọng tâm này là ${lesson.viTitle.toLowerCase()}.`,
+    `Nếu đọc ${lesson.sourceWork}, chương ${lesson.chapter}, bạn sẽ gặp đúng tinh thần này: ${lowerFirst(lesson.angle)}`,
+  ], lesson, "narration-source");
+
+  const bridge = pickVariant([
+    `Nghe thì gọn. Làm mới khó.`,
+    `Điểm khó là mình thường biết điều đó sau khi chuyện đã xong.`,
+    `Vấn đề không phải là thuộc câu chữ. Vấn đề là nhớ nó đúng lúc.`,
+    `Nói cách khác, đây không phải mẹo. Đây là thói quen nhìn tình thế.`,
+  ], lesson, "narration-bridge");
+
+  const close = pickVariant([
+    `Câu cần giữ lại là: ${lowerFirst(lesson.takeaway)}`,
+    `Lần tới, trước khi hành động, cứ tự hỏi: ${lowerFirst(lesson.takeaway)}`,
+    `Nếu chỉ nhớ một ý, hãy nhớ điều này: ${lowerFirst(lesson.takeaway)}`,
+    `Và đó là phần đáng luyện nhất: ${lowerFirst(lesson.takeaway)}`,
+  ], lesson, "narration-close");
+
+  const beats = lesson.beats.slice(0, 7);
+  const lines = [
+    opening,
+    sourceLine,
+    bridge,
+    ...beats,
+    close,
+  ].map(ensureSentence);
+
+  return auditHumanCopy(lines.join(" "));
+}
+
 function viralPostPack(lesson) {
   const sourceTag = hashtagify(lesson.sourceTitlePrefix);
   const authorTag = hashtagify(lesson.sourceAuthor);
@@ -435,30 +502,60 @@ function viralPostPack(lesson) {
     lessonTag,
   ];
   const platformHashtags = {
-    tiktok: ["#TikTokVietnam", "#LearnOnTikTok", "#ViralVietnam"],
-    "youtube-short": ["#Shorts", "#YouTubeShorts", "#ShortsVietnam"],
-    "facebook-reel": ["#Reels", "#FacebookReels", "#ReelsVietnam"],
+    tiktok: ["#TikTokVietnam", "#LearnOnTikTok"],
+    "youtube-short": ["#Shorts", "#YouTubeShorts"],
+    "facebook-reel": ["#Reels", "#FacebookReels"],
   };
-  const hookQuestion = lesson.sourceAuthor === "Tôn Tử"
-    ? `Nếu gặp đối thủ mạnh hơn, bạn sẽ đánh vào đâu?`
-    : `Bạn sẽ áp dụng bài học này vào chuyện gì hôm nay?`;
-  const lessonLine = `Bài học hôm nay: ${lesson.takeaway}`;
-  const ctaLine = `Comment "CỔ NHÂN" nếu muốn phần tiếp theo.`;
-  const sourceLine = `${lesson.sourceAuthor} - ${lesson.sourceWork}, chương ${lesson.chapter}: ${lesson.viTitle}`;
-  const base = [
-    `${lesson.sourceTitlePrefix}: ${lesson.hook}`,
+  const opener = pickVariant([
+    `${lesson.hook}. Câu này nghe ngắn, nhưng càng gặp việc thật càng thấy đúng.`,
+    `Có một lỗi rất người: biết nguyên tắc, nhưng quên đúng lúc cần dùng.`,
+    `${lesson.hook} không phải câu để treo lên cho đẹp. Nó là câu để tự nhắc mình trước khi phản ứng.`,
+    `Nếu hôm nay phải ra một quyết định khó, mình sẽ giữ câu này trong đầu: ${lowerFirst(lesson.hook)}`,
+  ], lesson, "caption-opener");
+  const angleLine = pickVariant([
+    ensureSentence(lesson.angle),
+    `Ý chính: ${lowerFirst(lesson.takeaway)}`,
+    `Nói gọn lại: ${lowerFirst(lesson.takeaway)}`,
+    `Phần đáng nhớ nhất là chỗ này: ${lowerFirst(lesson.takeaway)}`,
+  ], lesson, "caption-angle");
+  const questionLine = lesson.sourceAuthor === "Tôn Tử"
+    ? pickVariant([
+      `Bạn sẽ chọn đánh thẳng, hay tìm điểm yếu trước?`,
+      `Trong một cuộc đối đầu, bạn thường thắng bằng sức hay bằng thế?`,
+      `Có khi nào bạn lao vào quá sớm rồi mới thấy mình thiếu thế không?`,
+    ], lesson, "caption-question")
+    : pickVariant([
+      `Bạn đã từng biết một điều đúng, nhưng quên dùng nó đúng lúc chưa?`,
+      `Có câu nào bạn đang cần tự nhắc mình hôm nay không?`,
+      `Bạn sẽ đem ý này vào việc gì trước?`,
+    ], lesson, "caption-question");
+  const ctaLine = pickVariant([
+    `Lưu lại để lúc cần còn có câu tự kéo mình chậm lại.`,
+    `Nếu muốn mình làm tiếp các đoạn cổ văn kiểu này, để lại tên tác giả bạn muốn nghe.`,
+    `Gửi cho người đang cần bớt vội một nhịp.`,
+    `Bạn thấy câu này hợp với chuyện gì nhất?`,
+  ], lesson, "caption-cta");
+  const sourceLine = `Nguồn: ${sourceCredit(lesson)}.`;
+  const base = auditHumanCopy([
+    opener,
     "",
-    hookQuestion,
-    lessonLine,
-    sourceLine,
+    angleLine,
+    questionLine,
     "",
     ctaLine,
-  ].join("\n");
+    sourceLine,
+  ].join("\n"));
+  const captionTags = (platform, limit) => uniqueList([
+    sourceTag,
+    authorTag,
+    ...platformHashtags[platform],
+    ...coreHashtags,
+  ]).slice(0, limit).join(" ");
 
   const captions = {
-    tiktok: `${base}\n\n${uniqueList([...coreHashtags, ...platformHashtags.tiktok]).slice(0, 14).join(" ")}`,
-    "youtube-short": `${base}\n\n${uniqueList([...coreHashtags, ...platformHashtags["youtube-short"]]).slice(0, 13).join(" ")}`,
-    "facebook-reel": `${base}\n\n${uniqueList([...coreHashtags, ...platformHashtags["facebook-reel"]]).slice(0, 13).join(" ")}`,
+    tiktok: `${base}\n\n${captionTags("tiktok", 11)}`,
+    "youtube-short": `${base}\n\n${captionTags("youtube-short", 10)}`,
+    "facebook-reel": `${base}\n\n${captionTags("facebook-reel", 10)}`,
   };
   const youtubeTags = uniqueList([
     lesson.sourceTitlePrefix,
@@ -665,7 +762,7 @@ function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines 
       .scene-vignette-pulse { position: absolute; z-index: 5; inset: 0; opacity: 0; background: radial-gradient(circle at 50% 37%, rgba(255, 223, 137, 0.28), transparent 24%), radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.72) 100%); mix-blend-mode: soft-light; pointer-events: none; }
       .hook { position: absolute; z-index: 22; top: auto; left: 50px; right: 50px; bottom: 190px; height: 310px; color: #fff8e7; font-size: 86px; font-weight: 950; line-height: 0.96; text-align: center; text-transform: uppercase; text-shadow: 0 4px 0 rgba(142, 12, 26, 0.96), 0 22px 50px rgba(0,0,0,0.78); filter: none; }
       .hook em { display: block; color: #ffdd57; font-style: normal; }
-      .subtitle { position: absolute; z-index: 20; top: auto; left: 0; right: 0; bottom: 178px; height: 250px; overflow: visible; display: flex; justify-content: center; align-items: flex-end; pointer-events: none; }
+      .subtitle { position: absolute; z-index: 20; top: auto; left: 0; right: 0; bottom: 328px; height: 250px; overflow: visible; display: flex; justify-content: center; align-items: flex-end; pointer-events: none; }
       .subtitle span { position: absolute; left: 44px; right: 44px; bottom: 0; display: block; max-width: 992px; margin: 0 auto; padding: 22px 30px 25px; border: 4px solid rgba(224, 57, 137, 0.78); border-radius: 9px; background: rgba(24, 8, 28, 0.9); color: #fff5ff; font-size: 48px; font-weight: 950; line-height: 1.06; text-align: center; text-shadow: 0 2px 0 rgba(255, 71, 159, 0.65), 0 5px 14px rgba(0,0,0,0.88); box-shadow: 0 0 0 2px rgba(255,255,255,0.08), 0 20px 52px rgba(0,0,0,0.56); }
       .grain { position: absolute; z-index: 10; inset: 0; opacity: 0.14; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 3px), repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 6px); mix-blend-mode: soft-light; pointer-events: none; }
       .dust-veil { position: absolute; z-index: 9; inset: -12%; opacity: 0.2; background: radial-gradient(circle at 18% 24%, rgba(255,255,255,0.18), transparent 18%), radial-gradient(circle at 70% 42%, rgba(255,210,120,0.12), transparent 22%), radial-gradient(circle at 42% 78%, rgba(255,255,255,0.1), transparent 20%); filter: blur(18px); mix-blend-mode: screen; pointer-events: none; will-change: transform, opacity; }
