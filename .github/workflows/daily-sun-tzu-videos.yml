@@ -136,7 +136,6 @@ jobs:
           done
 
       - name: Publish social videos
-        if: ${{ github.event_name == 'schedule' || inputs.publish == true }}
         env:
           VIDEO_DATE: ${{ steps.slot.outputs.video_date }}
           RUN_SLOT: ${{ steps.slot.outputs.run_slot }}
