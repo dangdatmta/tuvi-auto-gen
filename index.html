@@ -95,21 +95,24 @@
       .subtitle {
         position: absolute;
         z-index: 20;
+        top: 50%;
         left: 0;
         right: 0;
-        bottom: 228px;
-        height: 250px;
+        bottom: auto;
+        height: 360px;
+        transform: translateY(-50%);
         overflow: visible;
         display: flex;
         justify-content: center;
-        align-items: flex-end;
+        align-items: center;
         pointer-events: none;
       }
       .subtitle span {
         position: absolute;
         left: 44px;
         right: 44px;
-        bottom: 0;
+        top: 50%;
+        bottom: auto;
         display: block;
         max-width: 992px;
         margin: 0 auto;
@@ -221,10 +224,10 @@
         ["#cap-10", 39.0, 3.7]
       ];
 
-      gsap.set(".subtitle span", { opacity: 0, y: 32, scale: 0.96 });
+      gsap.set(".subtitle span", { opacity: 0, yPercent: -50, y: 32, scale: 0.96 });
       for (const [selector, start, duration] of captionBeats) {
-        tl.fromTo(selector, { opacity: 0, y: 32, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.2, ease: "power2.out" }, start + 0.03);
-        tl.to(selector, { opacity: 0, y: 14, duration: 0.17, ease: "power2.in" }, start + duration - 0.18);
+        tl.fromTo(selector, { opacity: 0, yPercent: -50, y: 32, scale: 0.96 }, { opacity: 1, yPercent: -50, y: 0, scale: 1, duration: 0.2, ease: "power2.out" }, start + 0.03);
+        tl.to(selector, { opacity: 0, yPercent: -50, y: 14, duration: 0.17, ease: "power2.in" }, start + duration - 0.18);
       }
 
       tl.to("#root", { filter: "saturate(1.08) contrast(1.05)", duration: 0.001 }, 0);

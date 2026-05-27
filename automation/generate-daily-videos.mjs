@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile, copyFile, readdir } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -143,6 +143,17 @@ function slugify(text) {
     .replace(/^-|-$/g, "");
 }
 
+function normalizeForMatch(text) {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/đ/g, "d")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function hookHtml(text) {
   const words = text.trim().split(/\s+/);
   const splitAt = Math.max(1, Math.ceil(words.length / 2));
@@ -191,10 +202,135 @@ function imageRank(item) {
   return rank;
 }
 
+function isDocumentLikeImage(item) {
+  const text = imageText(item);
+  return /\.(pdf|djvu)(\?|$)/i.test(item.sourceUrl || item.url)
+    || text.includes(".pdf")
+    || text.includes(".djvu")
+    || text.includes("internet archive")
+    || text.includes("(ia ");
+}
+
+function canonicalImageUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    url.hash = "";
+    url.searchParams.delete("width");
+    url.searchParams.delete("height");
+    return url.toString();
+  } catch {
+    return String(value || "").trim();
+  }
+}
+
+function imageIdentity(item) {
+  return canonicalImageUrl(item.sourceUrl || item.url || item.downloadedUrl);
+}
+
+function imageSeriesKey(item) {
+  return normalizeForMatch(item.title || item.sourceUrl || item.url)
+    .replace(/^file\s+/, "")
+    .replace(/\bmet\s+dp\d+\b/g, "met")
+    .replace(/\b\d{6,}\b/g, "")
+    .replace(/\b[0-9]+[-_][0-9]+\b/g, "")
+    .replace(/\b[a-z]\b$/g, "")
+    .replace(/\b(jpg|jpeg|png|webp)\b$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function seededFraction(seed) {
+  return (hashDate(seed) % 100000) / 100000;
+}
+
+function candidateScore(item, lesson) {
+  const seed = variantSeed(lesson, `image:${item.query}:${imageIdentity(item)}`);
+  let score = imageRank(item) + seededFraction(seed);
+  if (item.isFallback) score -= 2;
+  if (item.documentLike) score -= 25;
+  if (item.usedBefore) score -= 60;
+  return score;
+}
+
 function isHistoricalImage(item) {
   const text = imageText(item);
   const culturallyRelevant = chineseHistoricalTerms.some((term) => text.includes(term));
   return culturallyRelevant && historicalScore(item) >= requiredHistoricalScore;
+}
+
+async function collectUsedImageUrls(rootDir = path.join(projectRoot, "daily")) {
+  const used = new Set();
+  async function visit(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+      } else if (entry.isFile() && entry.name === "image-sources.json") {
+        try {
+          const items = JSON.parse(await readFile(fullPath, "utf8"));
+          for (const item of items || []) {
+            for (const value of [item.url, item.downloadedUrl]) {
+              const normalized = canonicalImageUrl(value);
+              if (normalized) used.add(normalized);
+            }
+          }
+        } catch (error) {
+          console.warn(`Ignoring image history ${fullPath}: ${error.message}`);
+        }
+      }
+    }
+  }
+  await visit(rootDir);
+  return used;
+}
+
+function selectDiverseImageCandidates(candidates, lesson, targetCount = 7) {
+  const chosen = [];
+  const chosenIds = new Set();
+  const queryCounts = new Map();
+  const seriesCounts = new Map();
+  const sorted = [...candidates].sort((a, b) => candidateScore(b, lesson) - candidateScore(a, lesson));
+
+  const tryAdd = (item, { allowUsed = false, maxPerQuery = 2, maxPerSeries = 2 } = {}) => {
+    if (chosen.length >= targetCount) return false;
+    const id = imageIdentity(item);
+    if (!id || chosenIds.has(id)) return false;
+    if (item.usedBefore && !allowUsed) return false;
+    const queryKey = item.queryRoot || item.query;
+    const seriesKey = imageSeriesKey(item) || id;
+    if ((queryCounts.get(queryKey) || 0) >= maxPerQuery) return false;
+    if ((seriesCounts.get(seriesKey) || 0) >= maxPerSeries) return false;
+    chosen.push(item);
+    chosenIds.add(id);
+    queryCounts.set(queryKey, (queryCounts.get(queryKey) || 0) + 1);
+    seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
+    return true;
+  };
+
+  const passes = [
+    { items: sorted.filter((item) => !item.isFallback && !item.documentLike), allowUsed: false, maxPerQuery: 1, maxPerSeries: 1 },
+    { items: sorted.filter((item) => !item.isFallback && !item.documentLike), allowUsed: false, maxPerQuery: 2, maxPerSeries: 2 },
+    { items: sorted.filter((item) => item.isFallback && !item.documentLike), allowUsed: false, maxPerQuery: 1, maxPerSeries: 1 },
+    { items: sorted.filter((item) => item.isFallback && !item.documentLike), allowUsed: false, maxPerQuery: 2, maxPerSeries: 2 },
+    { items: sorted.filter((item) => !item.isFallback && !item.documentLike), allowUsed: true, maxPerQuery: 2, maxPerSeries: 2 },
+    { items: sorted.filter((item) => !item.documentLike), allowUsed: true, maxPerQuery: 3, maxPerSeries: 3 },
+    { items: sorted, allowUsed: true, maxPerQuery: 3, maxPerSeries: 3 },
+  ];
+
+  for (const pass of passes) {
+    for (const item of pass.items) {
+      tryAdd(item, pass);
+    }
+    if (chosen.length >= targetCount) break;
+  }
+
+  return chosen;
 }
 
 async function commonsSearch(query, limit = 8) {
@@ -274,38 +410,47 @@ async function download(url, output) {
 async function downloadLessonImages(lesson, dir) {
   const assetsDir = path.join(dir, "assets", "internet");
   await mkdir(assetsDir, { recursive: true });
-  const selected = [];
+  const candidates = [];
   const seen = new Set();
+  const usedImageUrls = await collectUsedImageUrls();
   const fallbackQueries = fallbackQueriesForLesson(lesson);
 
   const lessonQueries = lesson.searchQueries.flatMap((query) => [
-    `${query} painting`,
-    `${query} scroll`,
-    `${query} engraving`,
-    `${query} ancient Chinese`,
-    `${query} museum artifact`,
+    { query: `${query} painting`, queryRoot: query, isFallback: false },
+    { query: `${query} scroll`, queryRoot: query, isFallback: false },
+    { query: `${query} engraving`, queryRoot: query, isFallback: false },
+    { query: `${query} ancient Chinese`, queryRoot: query, isFallback: false },
+    { query: `${query} museum artifact`, queryRoot: query, isFallback: false },
   ]);
   const queryVariants = [
     ...lessonQueries,
-    ...fallbackQueries,
+    ...fallbackQueries.map((query) => ({ query, queryRoot: query, isFallback: true })),
   ];
 
-  for (const query of queryVariants) {
+  for (const queryVariant of queryVariants) {
     const results = [
-      ...await commonsSearch(query, 10),
-      ...await openverseSearch(query, 10),
+      ...await commonsSearch(queryVariant.query, 10),
+      ...await openverseSearch(queryVariant.query, 10),
     ];
     for (const item of results) {
-      if (seen.has(item.url)) continue;
-      seen.add(item.url);
-      selected.push({ ...item, query });
+      const identity = imageIdentity(item);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      candidates.push({
+        ...item,
+        query: queryVariant.query,
+        queryRoot: queryVariant.queryRoot,
+        isFallback: queryVariant.isFallback,
+        documentLike: isDocumentLikeImage(item),
+        usedBefore: usedImageUrls.has(canonicalImageUrl(item.sourceUrl)) || usedImageUrls.has(canonicalImageUrl(item.url)),
+      });
     }
   }
 
-  selected.sort((a, b) => imageRank(b) - imageRank(a));
+  const selected = selectDiverseImageCandidates(candidates, lesson, 7);
 
   if (selected.length < 3) {
-    throw new Error(`Not enough historical image candidates for ${lesson.chapter}; found ${selected.length}`);
+    throw new Error(`Not enough historical image candidates for ${lesson.chapter}; found ${selected.length} from ${candidates.length} candidates`);
   }
 
   const sources = [];
@@ -321,8 +466,11 @@ async function downloadLessonImages(lesson, dir) {
         url: item.sourceUrl || item.url,
         downloadedUrl: item.url,
         query: item.query,
+        queryRoot: item.queryRoot,
         provider: item.provider,
         historicalScore: historicalScore(item),
+        documentLike: item.documentLike,
+        usedBefore: item.usedBefore,
       });
     } catch (error) {
       console.warn(`Skipping image: ${item.url} (${error.message})`);
@@ -444,7 +592,7 @@ function sourceCredit(lesson) {
   return `${lesson.sourceAuthor}, ${lesson.sourceWork}, chương ${lesson.chapter}: ${lesson.viTitle}`;
 }
 
-function narrationText(lesson) {
+function narrationParts(lesson) {
   const opening = pickVariant([
     `${lesson.hook} nghe giống một câu khẩu hiệu. Nhưng đặt vào đời thật, nó là một cách tránh sai lầm rất đắt.`,
     `Có những lúc mình thua không phải vì yếu hơn. Mình thua vì phản ứng quá nhanh, hoặc quá chậm.`,
@@ -473,15 +621,73 @@ function narrationText(lesson) {
   ], lesson, "narration-close");
 
   const beats = lesson.beats.slice(0, 7);
-  const lines = [
+  return [
     opening,
     sourceLine,
     bridge,
     ...beats,
     close,
-  ].map(ensureSentence);
+  ].map((part) => auditHumanCopy(ensureSentence(part))).filter(Boolean);
+}
 
-  return auditHumanCopy(lines.join(" "));
+function splitSentences(text) {
+  return String(text || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => auditHumanCopy(part))
+    .filter(Boolean);
+}
+
+function splitLongCaption(text, maxChars = 68) {
+  const clean = auditHumanCopy(text);
+  if (clean.length <= maxChars) return [clean];
+  const words = clean.split(/\s+/).filter(Boolean);
+  const chunks = [];
+  let current = "";
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > maxChars && current) {
+      chunks.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function narrationBundle(lesson) {
+  const parts = narrationParts(lesson);
+  const segments = parts.flatMap((part) => splitSentences(part).flatMap((sentence) => splitLongCaption(sentence)));
+  return {
+    text: auditHumanCopy(segments.join(" ")),
+    segments,
+  };
+}
+
+function wordsForTiming(text) {
+  return normalizeForMatch(text).split(/\s+/).filter(Boolean);
+}
+
+function fallbackCaptionTracks(segments, duration) {
+  const startAt = 0.2;
+  const endAt = Math.max(startAt + 0.5, duration - 0.45);
+  const available = Math.max(0.5, endAt - startAt);
+  const weights = segments.map((segment) => Math.max(1, wordsForTiming(segment).length));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || segments.length || 1;
+  let cursor = startAt;
+  return segments.map((text, index) => {
+    const isLast = index === segments.length - 1;
+    const segmentDuration = isLast ? endAt - cursor : available * weights[index] / totalWeight;
+    const start = Number(cursor.toFixed(2));
+    const end = isLast ? endAt : Math.min(endAt, cursor + segmentDuration);
+    cursor = end;
+    return {
+      text,
+      start,
+      duration: Number(Math.max(0.45, end - start).toFixed(2)),
+    };
+  });
 }
 
 function viralPostPack(lesson) {
@@ -645,7 +851,7 @@ function subjectDepthForImage(img, subjectOutlines) {
         </div>`;
 }
 
-function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines = new Map() }) {
+function renderHtml({ lesson, platform, imageSources, duration, captionTracks, subjectOutlines = new Map() }) {
   const sceneDur = duration / 7;
   const transitionDur = 0.58;
   const scenes = imageSources.map((img, i) => {
@@ -664,13 +870,10 @@ function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines 
       </div>`;
   }).join("\n      ");
 
-  const captions = lesson.beats.slice(0, 8);
-  const capStart = 3;
-  const capDur = (duration - capStart - 1.2) / captions.length;
-  const capSpans = captions.map((beat, i) => `<span id="cap-${i + 1}">${beat}</span>`).join("\n        ");
-  const capBeats = captions.map((_, i) => {
-    const start = +(capStart + i * capDur).toFixed(2);
-    return `["#cap-${i + 1}", ${start}, ${+capDur.toFixed(2)}]`;
+  const captions = captionTracks || fallbackCaptionTracks(narrationBundle(lesson).segments, duration);
+  const capSpans = captions.map((caption, i) => `<span id="cap-${i + 1}">${escapeHtml(caption.text)}</span>`).join("\n        ");
+  const capBeats = captions.map((caption, i) => {
+    return `["#cap-${i + 1}", ${Number(caption.start).toFixed(2)}, ${Number(caption.duration).toFixed(2)}]`;
   }).join(",\n        ");
 
   const sceneTweens = imageSources.map((img, i) => {
@@ -722,8 +925,8 @@ function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines 
   }).filter(Boolean).join("\n      ");
 
   const captionPulseOpacity = Math.min(1, subjectLayerOpacity + 0.07).toFixed(2);
-  const captionPulseTweens = captions.map((_, i) => {
-    const start = +(capStart + i * capDur + 0.07).toFixed(2);
+  const captionPulseTweens = captions.map((caption, i) => {
+    const start = +(caption.start + 0.07).toFixed(2);
     const sceneIndex = Math.min(6, Math.floor(start / sceneDur));
     const outline = subjectOutlines.get(imageSources[sceneIndex]?.file);
     if (!outline?.hasSubjectLayer) return "";
@@ -762,8 +965,8 @@ function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines 
       .scene-vignette-pulse { position: absolute; z-index: 5; inset: 0; opacity: 0; background: radial-gradient(circle at 50% 37%, rgba(255, 223, 137, 0.28), transparent 24%), radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.72) 100%); mix-blend-mode: soft-light; pointer-events: none; }
       .hook { position: absolute; z-index: 22; top: auto; left: 50px; right: 50px; bottom: 190px; height: 310px; color: #fff8e7; font-size: 86px; font-weight: 950; line-height: 0.96; text-align: center; text-transform: uppercase; text-shadow: 0 4px 0 rgba(142, 12, 26, 0.96), 0 22px 50px rgba(0,0,0,0.78); filter: none; }
       .hook em { display: block; color: #ffdd57; font-style: normal; }
-      .subtitle { position: absolute; z-index: 20; top: auto; left: 0; right: 0; bottom: 328px; height: 250px; overflow: visible; display: flex; justify-content: center; align-items: flex-end; pointer-events: none; }
-      .subtitle span { position: absolute; left: 44px; right: 44px; bottom: 0; display: block; max-width: 992px; margin: 0 auto; padding: 22px 30px 25px; border: 4px solid rgba(224, 57, 137, 0.78); border-radius: 9px; background: rgba(24, 8, 28, 0.9); color: #fff5ff; font-size: 48px; font-weight: 950; line-height: 1.06; text-align: center; text-shadow: 0 2px 0 rgba(255, 71, 159, 0.65), 0 5px 14px rgba(0,0,0,0.88); box-shadow: 0 0 0 2px rgba(255,255,255,0.08), 0 20px 52px rgba(0,0,0,0.56); }
+      .subtitle { position: absolute; z-index: 20; top: 50%; left: 0; right: 0; bottom: auto; height: 360px; transform: translateY(-50%); overflow: visible; display: flex; justify-content: center; align-items: center; pointer-events: none; }
+      .subtitle span { position: absolute; left: 44px; right: 44px; top: 50%; bottom: auto; display: block; max-width: 992px; margin: 0 auto; padding: 22px 30px 25px; border: 4px solid rgba(224, 57, 137, 0.78); border-radius: 9px; background: rgba(24, 8, 28, 0.9); color: #fff5ff; font-size: 48px; font-weight: 950; line-height: 1.06; text-align: center; text-shadow: 0 2px 0 rgba(255, 71, 159, 0.65), 0 5px 14px rgba(0,0,0,0.88); box-shadow: 0 0 0 2px rgba(255,255,255,0.08), 0 20px 52px rgba(0,0,0,0.56); }
       .grain { position: absolute; z-index: 10; inset: 0; opacity: 0.14; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 3px), repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 6px); mix-blend-mode: soft-light; pointer-events: none; }
       .dust-veil { position: absolute; z-index: 9; inset: -12%; opacity: 0.2; background: radial-gradient(circle at 18% 24%, rgba(255,255,255,0.18), transparent 18%), radial-gradient(circle at 70% 42%, rgba(255,210,120,0.12), transparent 22%), radial-gradient(circle at 42% 78%, rgba(255,255,255,0.1), transparent 20%); filter: blur(18px); mix-blend-mode: screen; pointer-events: none; will-change: transform, opacity; }
       .transition-flash { position: absolute; z-index: 11; inset: 0; opacity: 0; background: radial-gradient(circle at 35% 28%, rgba(255, 224, 115, 0.6), transparent 34%), linear-gradient(115deg, transparent 0%, rgba(255, 68, 34, 0.22) 48%, transparent 74%); mix-blend-mode: screen; pointer-events: none; }
@@ -776,7 +979,7 @@ function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines 
       <div class="grain" data-layout-ignore></div>
       <div id="transition-flash" class="transition-flash" data-layout-ignore></div>
       <div id="hero-hook" class="clip hook" data-start="0" data-duration="3" data-track-index="4">${hookHtml(lesson.hook)}</div>
-      <div id="subtitles" class="clip subtitle" data-start="3" data-duration="${duration - 3}" data-track-index="1" data-layout-allow-overflow>
+      <div id="subtitles" class="clip subtitle" data-start="0" data-duration="${duration}" data-track-index="1" data-layout-allow-overflow>
         ${capSpans}
       </div>
       <audio id="narration" data-start="0" data-duration="${duration}" data-track-index="2" src="assets/narration.wav" data-volume="1"></audio>
@@ -804,10 +1007,10 @@ function renderHtml({ lesson, platform, imageSources, duration, subjectOutlines 
       const captionBeats = [
         ${capBeats}
       ];
-      gsap.set(".subtitle span", { opacity: 0, y: 32, scale: 0.96 });
+      gsap.set(".subtitle span", { opacity: 0, yPercent: -50, y: 32, scale: 0.96 });
       for (const [selector, start, duration] of captionBeats) {
-        tl.fromTo(selector, { opacity: 0, y: 32, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.2, ease: "power2.out" }, start + 0.03);
-        tl.to(selector, { opacity: 0, y: 14, duration: 0.17, ease: "power2.in" }, start + duration - 0.18);
+        tl.fromTo(selector, { opacity: 0, yPercent: -50, y: 32, scale: 0.96 }, { opacity: 1, yPercent: -50, y: 0, scale: 1, duration: 0.2, ease: "power2.out" }, start + 0.03);
+        tl.to(selector, { opacity: 0, yPercent: -50, y: 14, duration: 0.17, ease: "power2.in" }, start + duration - 0.18);
       }
       ${captionPulseTweens}
       tl.to("#root", { opacity: 0, duration: 0.35, ease: "power2.in" }, ${duration - 0.35});
@@ -824,6 +1027,149 @@ function run(cmd, args, cwd, env = {}) {
     env: { ...process.env, ...env },
   });
   if (result.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed`);
+}
+
+function runCapture(cmd, args, cwd, env = {}) {
+  const result = spawnSync(cmd, args, {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+  if (result.status !== 0) {
+    throw new Error(`${cmd} ${args.join(" ")} failed: ${result.stderr || result.stdout || "unknown error"}`);
+  }
+  return result.stdout;
+}
+
+function mediaDurationSeconds(file) {
+  const result = spawnSync("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=nk=1:nw=1",
+    file,
+  ], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`ffprobe duration failed for ${file}: ${result.stderr || "unknown error"}`);
+  }
+  const duration = Number(result.stdout.trim());
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Invalid media duration for ${file}: ${result.stdout.trim()}`);
+  }
+  return Number(duration.toFixed(3));
+}
+
+function parseJsonFromOutput(output) {
+  const text = String(output || "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(text.slice(start, end + 1));
+    }
+    throw new Error(`Unable to parse JSON output: ${text.slice(0, 240)}`);
+  }
+}
+
+function collectTranscriptWords(value, words = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectTranscriptWords(item, words);
+    return words;
+  }
+  if (!value || typeof value !== "object") return words;
+
+  const label = value.word ?? value.text ?? value.token;
+  const start = Number(value.start ?? value.startTime ?? value.start_time);
+  const end = Number(value.end ?? value.endTime ?? value.end_time);
+  if (typeof label === "string" && Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    const normalizedWords = wordsForTiming(label);
+    if (normalizedWords.length > 0 && normalizedWords.length <= 3) {
+      words.push({ text: label.trim(), start, end });
+      return words;
+    }
+  }
+
+  for (const child of Object.values(value)) collectTranscriptWords(child, words);
+  return words;
+}
+
+function extractTranscriptWords(transcript) {
+  if (Array.isArray(transcript?.words)) {
+    return collectTranscriptWords(transcript.words);
+  }
+  if (Array.isArray(transcript?.segments)) {
+    const segmentWords = transcript.segments.flatMap((segment) => (
+      Array.isArray(segment?.words) ? collectTranscriptWords(segment.words) : []
+    ));
+    if (segmentWords.length) return segmentWords;
+  }
+  return collectTranscriptWords(transcript);
+}
+
+function transcriptFromTranscribeResult(result, dir) {
+  if (result?.ok === true && typeof result.transcriptPath === "string") {
+    return JSON.parse(readFileSync(result.transcriptPath, "utf8"));
+  }
+  const localTranscript = path.join(dir, "assets", "transcript.json");
+  if (existsSync(localTranscript)) {
+    return JSON.parse(readFileSync(localTranscript, "utf8"));
+  }
+  return result;
+}
+
+function transcribeNarration(dir) {
+  const language = process.env.TRANSCRIBE_LANGUAGE || "vi";
+  const model = process.env.TRANSCRIBE_MODEL || "small";
+  const output = runCapture("npx", [
+    "--yes", "hyperframes@0.6.40",
+    "transcribe", "assets/narration.wav",
+    "--language", language,
+    "--model", model,
+    "--json",
+  ], dir);
+  const result = parseJsonFromOutput(output);
+  const transcript = transcriptFromTranscribeResult(result, dir);
+  const words = extractTranscriptWords(transcript);
+  if (!words.length) {
+    throw new Error(`Transcription completed with model "${model}" but no word-level timestamps were found.`);
+  }
+  return { transcript, words };
+}
+
+function captionTracksFromTranscript(segments, transcriptWords, duration) {
+  const words = transcriptWords
+    .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > word.start)
+    .sort((a, b) => a.start - b.start);
+  if (!segments.length || words.length < segments.length) {
+    throw new Error(`Not enough transcript words for subtitle sync: ${words.length} words for ${segments.length} captions.`);
+  }
+
+  const counts = segments.map((segment) => Math.max(1, wordsForTiming(segment).length));
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  let wordStart = 0;
+  let cumulative = 0;
+  let previousEnd = 0;
+
+  return segments.map((text, index) => {
+    cumulative += counts[index];
+    const targetEnd = index === segments.length - 1
+      ? words.length
+      : Math.max(wordStart + 1, Math.round((cumulative / total) * words.length));
+    const wordEnd = Math.min(words.length - 1, targetEnd - 1);
+    const first = words[wordStart] || words[wordEnd];
+    const last = words[wordEnd] || first;
+    const start = Math.max(previousEnd, Math.max(0, first.start - 0.08));
+    const rawEnd = Math.min(duration, last.end + 0.22);
+    const end = Math.max(start + 0.45, rawEnd);
+    previousEnd = Math.min(duration, end);
+    wordStart = Math.min(words.length - 1, targetEnd);
+    return {
+      text,
+      start: Number(start.toFixed(2)),
+      duration: Number(Math.max(0.45, previousEnd - start).toFixed(2)),
+    };
+  });
 }
 
 async function generateSubjectOutlines(dir) {
@@ -884,8 +1230,10 @@ async function prepareProject(lesson, platform) {
 
   const imageSources = await downloadLessonImages(lesson, dir);
   const subjectOutlines = await generateSubjectOutlines(dir);
-  const text = narrationText(lesson);
+  const narration = narrationBundle(lesson);
+  const text = narration.text;
   await writeFile(path.join(dir, "script.txt"), text, "utf8");
+  await writeFile(path.join(dir, "subtitle-segments.json"), JSON.stringify(narration.segments, null, 2), "utf8");
   await writeFile(path.join(dir, "image-sources.json"), JSON.stringify(imageSources, null, 2), "utf8");
   await writeFile(path.join(dir, "hyperframes.json"), JSON.stringify({
     $schema: "https://hyperframes.heygen.com/schema/hyperframes.json",
@@ -893,18 +1241,8 @@ async function prepareProject(lesson, platform) {
     paths: { blocks: "compositions", components: "compositions/components", assets: "assets" },
   }, null, 2), "utf8");
 
-  const duration = Math.min(60, Math.max(38, Math.ceil(text.length / 18)));
-  await writeFile(path.join(dir, "index.html"), renderHtml({ lesson, platform, imageSources, duration, subjectOutlines }), "utf8");
-  await writeFile(path.join(dir, "post.json"), JSON.stringify(postMetadata(lesson, platform, duration), null, 2), "utf8");
-
-  const musicSource = path.join(projectRoot, "assets", "background_music.mp3");
-  if (!existsSync(musicSource)) throw new Error("Missing assets/background_music.mp3");
-  run("ffmpeg", [
-    "-y", "-i", musicSource, "-t", String(duration),
-    "-af", `volume=0.34,afade=t=in:st=0:d=1.1,afade=t=out:st=${Math.max(1, duration - 1.6)}:d=1.6`,
-    "-ar", "48000", "-ac", "2", path.join(dir, "assets", "background_music.mp3"),
-  ], projectRoot);
-
+  let duration;
+  let captionTracks;
   if (process.env.SKIP_TTS !== "1") {
     const vieneuDir = process.env.VIENEU_DIR || path.resolve(projectRoot, "..", "VieNeu-TTS");
     const localPython = path.join(vieneuDir, ".venv", "bin", "python");
@@ -923,9 +1261,27 @@ async function prepareProject(lesson, platform) {
       "-af", "highpass=f=75,lowpass=f=11500,equalizer=f=3200:t=q:w=1.2:g=2.0,acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2,loudnorm=I=-14:TP=-1.0:LRA=7,volume=2,alimiter=limit=0.98",
       "-ar", "48000", "-ac", "2", path.join(dir, "assets", "narration.wav"),
     ], dir);
+    duration = mediaDurationSeconds(path.join(dir, "assets", "narration.wav"));
+    const { transcript, words } = transcribeNarration(dir);
+    await writeFile(path.join(dir, "transcript.json"), JSON.stringify(transcript, null, 2), "utf8");
+    captionTracks = captionTracksFromTranscript(narration.segments, words, duration);
   } else {
+    duration = Math.max(1, Math.ceil(text.length / 18));
     run("ffmpeg", ["-y", "-f", "lavfi", "-i", `anullsrc=r=48000:cl=stereo`, "-t", String(duration), path.join(dir, "assets", "narration.wav")], dir);
+    captionTracks = fallbackCaptionTracks(narration.segments, duration);
   }
+  await writeFile(path.join(dir, "caption-tracks.json"), JSON.stringify(captionTracks, null, 2), "utf8");
+
+  const musicSource = path.join(projectRoot, "assets", "background_music.mp3");
+  if (!existsSync(musicSource)) throw new Error("Missing assets/background_music.mp3");
+  run("ffmpeg", [
+    "-y", "-i", musicSource, "-t", String(duration),
+    "-af", `volume=0.51,afade=t=in:st=0:d=1.1,afade=t=out:st=${Math.max(1, duration - 1.6)}:d=1.6`,
+    "-ar", "48000", "-ac", "2", path.join(dir, "assets", "background_music.mp3"),
+  ], projectRoot);
+
+  await writeFile(path.join(dir, "index.html"), renderHtml({ lesson, platform, imageSources, duration, captionTracks, subjectOutlines }), "utf8");
+  await writeFile(path.join(dir, "post.json"), JSON.stringify(postMetadata(lesson, platform, duration), null, 2), "utf8");
 
   return {
     dir,
