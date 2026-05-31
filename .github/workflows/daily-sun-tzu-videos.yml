@@ -112,6 +112,10 @@ jobs:
         env:
           VIDEO_DATE: ${{ steps.slot.outputs.video_date }}
           RUN_SLOT: ${{ steps.slot.outputs.run_slot }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_TEXT_MODEL: ${{ secrets.GEMINI_TEXT_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_TEMPERATURE: ${{ secrets.GEMINI_TEMPERATURE || '0.8' }}
+          GEMINI_MAX_RETRIES: ${{ secrets.GEMINI_MAX_RETRIES || '2' }}
           PYTHON_BIN: python
           VIENEU_VOICE: Tuyen
           ENABLE_SUBJECT_OUTLINE: "true"
