@@ -4,6 +4,18 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const projectRoot = process.cwd();
+const envPath = path.join(projectRoot, ".env");
+
+if (existsSync(envPath)) {
+  const envText = await readFile(envPath, "utf8");
+  for (const line of envText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const [key, ...valueParts] = trimmed.split("=");
+    if (!process.env[key]) process.env[key] = valueParts.join("=").replace(/^['"]|['"]$/g, "");
+  }
+}
+
 const sunTzuLessons = JSON.parse(await readFile(path.join(projectRoot, "automation", "lessons.json"), "utf8"));
 const extraLessons = JSON.parse(await readFile(path.join(projectRoot, "automation", "extra-lessons.json"), "utf8"));
 const lessons = [
@@ -22,7 +34,6 @@ const slot = normalizeSlot(process.env.RUN_SLOT || inferSlotFromUtcHour(new Date
 const distribution = { id: "social", label: "TikTok / Shorts / Reels" };
 
 const outRoot = path.join(projectRoot, "daily", date, `slot-${slot}`);
-await mkdir(outRoot, { recursive: true });
 const imageUserAgent = "Mozilla/5.0 (compatible; sun-tzu-video-bot/1.0; +https://github.com/heygen-com/hyperframes)";
 const requiredHistoricalScore = Number(process.env.IMAGE_HISTORICAL_SCORE || 1);
 const subjectLayerOpacity = clamp(Number(process.env.SUBJECT_LAYER_OPACITY || 0.92), 0, 1);
@@ -49,6 +60,12 @@ const blockedIrrelevantImageTerms = [
   "house decoration", "paperhanging", "water colours", "watercolors", "text-book of the history of painting",
   "negro in ancient history", "loan collection", "wall painting europe",
 ];
+const supportedPlatforms = ["tiktok", "youtube-short", "facebook-reel"];
+const platformHashtags = {
+  tiktok: ["#TikTokVietnam", "#LearnOnTikTok"],
+  "youtube-short": ["#Shorts", "#YouTubeShorts"],
+  "facebook-reel": ["#Reels", "#FacebookReels"],
+};
 const chineseHistoricalTerms = [
   "china", "chinese", "sun tzu", "confucius", "laozi", "lao tzu", "tzu", "han", "tang", "song", "yuan", "ming",
   "qing", "warring states", "three kingdoms", "guan yu", "red cliffs", "terracotta",
@@ -138,6 +155,8 @@ function slugify(text) {
   return text
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
@@ -560,17 +579,6 @@ function variantSeed(lesson, purpose = "copy") {
   return `${date}|${slot}|${lesson.sourceAuthor}|${lesson.sourceWork}|${lesson.chapter}|${lesson.title}|${purpose}`;
 }
 
-function pickVariant(items, lesson, purpose = "copy", offset = 0) {
-  if (!items.length) return "";
-  return items[(hashDate(variantSeed(lesson, purpose)) + offset) % items.length];
-}
-
-function lowerFirst(text) {
-  const value = String(text || "").trim();
-  if (!value) return "";
-  return value.charAt(0).toLocaleLowerCase("vi") + value.slice(1);
-}
-
 function ensureSentence(text) {
   const value = String(text || "").trim();
   if (!value) return "";
@@ -580,7 +588,7 @@ function ensureSentence(text) {
 function auditHumanCopy(text) {
   return String(text || "")
     .replace(/Bài học hôm nay:\s*/gi, "")
-    .replace(/Comment\s+"CỔ NHÂN"\s+nếu muốn phần tiếp theo\./gi, "Lưu lại nếu bạn cần một câu nhắc mình trước khi quyết định.")
+    .replace(/Comment\s+"CỔ NHÂN"\s+nếu muốn phần tiếp theo\./gi, "")
     .replace(/\b(cực kỳ|vô cùng)\s+/gi, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -588,46 +596,21 @@ function auditHumanCopy(text) {
     .trim();
 }
 
-function sourceCredit(lesson) {
-  return `${lesson.sourceAuthor}, ${lesson.sourceWork}, chương ${lesson.chapter}: ${lesson.viTitle}`;
+function asCleanString(value, fieldName) {
+  const text = auditHumanCopy(value);
+  if (!text) throw new Error(`Gemini copy missing ${fieldName}.`);
+  return text;
 }
 
-function narrationParts(lesson) {
-  const opening = pickVariant([
-    `${lesson.hook} nghe giống một câu khẩu hiệu. Nhưng đặt vào đời thật, nó là một cách tránh sai lầm rất đắt.`,
-    `Có những lúc mình thua không phải vì yếu hơn. Mình thua vì phản ứng quá nhanh, hoặc quá chậm.`,
-    `Bài này không nằm trên chiến trường xa xưa. Nó nằm trong một quyết định bạn có thể gặp ngay hôm nay.`,
-    `Một câu cổ nghe qua tưởng đơn giản. Đến lúc va vào việc thật mới thấy nó sắc.`,
-  ], lesson, "narration-opening");
+function asCleanStringArray(value, fieldName, { min = 1, max = 20 } = {}) {
+  if (!Array.isArray(value)) throw new Error(`Gemini copy field ${fieldName} must be an array.`);
+  const items = value.map((item) => auditHumanCopy(item)).filter(Boolean);
+  if (items.length < min) throw new Error(`Gemini copy field ${fieldName} needs at least ${min} item(s).`);
+  return items.slice(0, max);
+}
 
-  const sourceLine = pickVariant([
-    `${lesson.sourceAuthor} chạm vào ý đó trong ${lesson.sourceWork}, chương ${lesson.chapter}, phần ${lesson.viTitle.toLowerCase()}.`,
-    `Trong ${lesson.sourceWork}, chương ${lesson.chapter}, ${lesson.sourceAuthor} gọi trọng tâm này là ${lesson.viTitle.toLowerCase()}.`,
-    `Nếu đọc ${lesson.sourceWork}, chương ${lesson.chapter}, bạn sẽ gặp đúng tinh thần này: ${lowerFirst(lesson.angle)}`,
-  ], lesson, "narration-source");
-
-  const bridge = pickVariant([
-    `Nghe thì gọn. Làm mới khó.`,
-    `Điểm khó là mình thường biết điều đó sau khi chuyện đã xong.`,
-    `Vấn đề không phải là thuộc câu chữ. Vấn đề là nhớ nó đúng lúc.`,
-    `Nói cách khác, đây không phải mẹo. Đây là thói quen nhìn tình thế.`,
-  ], lesson, "narration-bridge");
-
-  const close = pickVariant([
-    `Câu cần giữ lại là: ${lowerFirst(lesson.takeaway)}`,
-    `Lần tới, trước khi hành động, cứ tự hỏi: ${lowerFirst(lesson.takeaway)}`,
-    `Nếu chỉ nhớ một ý, hãy nhớ điều này: ${lowerFirst(lesson.takeaway)}`,
-    `Và đó là phần đáng luyện nhất: ${lowerFirst(lesson.takeaway)}`,
-  ], lesson, "narration-close");
-
-  const beats = lesson.beats.slice(0, 7);
-  return [
-    opening,
-    sourceLine,
-    bridge,
-    ...beats,
-    close,
-  ].map((part) => auditHumanCopy(ensureSentence(part))).filter(Boolean);
+function sourceCredit(lesson) {
+  return `${lesson.sourceAuthor}, ${lesson.sourceWork}, chương ${lesson.chapter}: ${lesson.viTitle}`;
 }
 
 function splitSentences(text) {
@@ -656,8 +639,9 @@ function splitLongCaption(text, maxChars = 68) {
   return chunks;
 }
 
-function narrationBundle(lesson) {
-  const parts = narrationParts(lesson);
+function narrationBundle(scriptSegments) {
+  const parts = asCleanStringArray(scriptSegments, "scriptSegments", { min: 4, max: 16 })
+    .map((part) => ensureSentence(part));
   const segments = parts.flatMap((part) => splitSentences(part).flatMap((sentence) => splitLongCaption(sentence)));
   return {
     text: auditHumanCopy(segments.join(" ")),
@@ -690,111 +674,316 @@ function fallbackCaptionTracks(segments, duration) {
   });
 }
 
-function viralPostPack(lesson) {
-  const sourceTag = hashtagify(lesson.sourceTitlePrefix);
-  const authorTag = hashtagify(lesson.sourceAuthor);
-  const chapterTag = hashtagify(`chuong ${lesson.chapter} ${lesson.sourceAuthor}`);
-  const lessonTag = hashtagify(lesson.hook);
-  const coreHashtags = [
-    sourceTag,
-    authorTag,
-    lesson.sourceAuthor === "Tôn Tử" ? "#ArtOfWar" : "#TrietHocPhuongDong",
-    "#BaiHocCuocSong",
-    "#TuDuyChienLuoc",
-    "#ChienLuoc",
-    "#KyNangSong",
-    "#TriTueCoNhan",
-    chapterTag,
-    lessonTag,
-  ];
-  const platformHashtags = {
-    tiktok: ["#TikTokVietnam", "#LearnOnTikTok"],
-    "youtube-short": ["#Shorts", "#YouTubeShorts"],
-    "facebook-reel": ["#Reels", "#FacebookReels"],
-  };
-  const opener = pickVariant([
-    `${lesson.hook}. Câu này nghe ngắn, nhưng càng gặp việc thật càng thấy đúng.`,
-    `Có một lỗi rất người: biết nguyên tắc, nhưng quên đúng lúc cần dùng.`,
-    `${lesson.hook} không phải câu để treo lên cho đẹp. Nó là câu để tự nhắc mình trước khi phản ứng.`,
-    `Nếu hôm nay phải ra một quyết định khó, mình sẽ giữ câu này trong đầu: ${lowerFirst(lesson.hook)}`,
-  ], lesson, "caption-opener");
-  const angleLine = pickVariant([
-    ensureSentence(lesson.angle),
-    `Ý chính: ${lowerFirst(lesson.takeaway)}`,
-    `Nói gọn lại: ${lowerFirst(lesson.takeaway)}`,
-    `Phần đáng nhớ nhất là chỗ này: ${lowerFirst(lesson.takeaway)}`,
-  ], lesson, "caption-angle");
-  const questionLine = lesson.sourceAuthor === "Tôn Tử"
-    ? pickVariant([
-      `Bạn sẽ chọn đánh thẳng, hay tìm điểm yếu trước?`,
-      `Trong một cuộc đối đầu, bạn thường thắng bằng sức hay bằng thế?`,
-      `Có khi nào bạn lao vào quá sớm rồi mới thấy mình thiếu thế không?`,
-    ], lesson, "caption-question")
-    : pickVariant([
-      `Bạn đã từng biết một điều đúng, nhưng quên dùng nó đúng lúc chưa?`,
-      `Có câu nào bạn đang cần tự nhắc mình hôm nay không?`,
-      `Bạn sẽ đem ý này vào việc gì trước?`,
-    ], lesson, "caption-question");
-  const ctaLine = pickVariant([
-    `Lưu lại để lúc cần còn có câu tự kéo mình chậm lại.`,
-    `Nếu muốn mình làm tiếp các đoạn cổ văn kiểu này, để lại tên tác giả bạn muốn nghe.`,
-    `Gửi cho người đang cần bớt vội một nhịp.`,
-    `Bạn thấy câu này hợp với chuyện gì nhất?`,
-  ], lesson, "caption-cta");
-  const sourceLine = `Nguồn: ${sourceCredit(lesson)}.`;
-  const base = auditHumanCopy([
-    opener,
-    "",
-    angleLine,
-    questionLine,
-    "",
-    ctaLine,
-    sourceLine,
-  ].join("\n"));
-  const captionTags = (platform, limit) => uniqueList([
-    sourceTag,
-    authorTag,
-    ...platformHashtags[platform],
-    ...coreHashtags,
-  ]).slice(0, limit).join(" ");
+const geminiCopySchema = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description: "Short Vietnamese social-video title focused on the lesson idea, not the author.",
+    },
+    scriptSegments: {
+      type: "array",
+      minItems: 5,
+      maxItems: 10,
+      items: {
+        type: "string",
+        description: "One concise Vietnamese narration sentence.",
+      },
+    },
+    captionBase: {
+      type: "string",
+      description: "Vietnamese caption body without hashtags. Must include a final source line.",
+    },
+    captions: {
+      type: "object",
+      properties: {
+        tiktok: { type: "string" },
+        "youtube-short": { type: "string" },
+        "facebook-reel": { type: "string" },
+      },
+      required: ["tiktok", "youtube-short", "facebook-reel"],
+    },
+    hashtags: {
+      type: "array",
+      minItems: 8,
+      maxItems: 16,
+      items: { type: "string" },
+    },
+    youtubeTags: {
+      type: "array",
+      minItems: 8,
+      maxItems: 16,
+      items: { type: "string" },
+    },
+  },
+  required: ["title", "scriptSegments", "captionBase", "captions", "hashtags", "youtubeTags"],
+};
 
-  const captions = {
-    tiktok: `${base}\n\n${captionTags("tiktok", 11)}`,
-    "youtube-short": `${base}\n\n${captionTags("youtube-short", 10)}`,
-    "facebook-reel": `${base}\n\n${captionTags("facebook-reel", 10)}`,
-  };
-  const youtubeTags = uniqueList([
-    lesson.sourceTitlePrefix,
+function geminiCopyPrompt(lesson) {
+  return [
+    "Bạn là một người viết video ngắn tiếng Việt, giọng đời thường.",
+    "Hãy viết nội dung social video từ dữ liệu lesson bên dưới.",
+    "",
+    "Yêu cầu narration:",
+    "- Viết như một người đang nói với một người khác, không như bài văn mẫu.",
+    "- Mở bằng một tình huống nhỏ, một nhận xét có hơi người, hoặc một câu nói thẳng.",
+    "- Dùng từ bình thường: việc, chuyện, ghi chú, quên, làm thử, nhớ lại.",
+    "- Có câu rất ngắn xen câu dài hơn; đừng để câu nào cũng cùng một nhịp.",
+    "- Có thể dùng 'mình', 'bạn' vừa phải nếu hợp ngữ cảnh.",
+    "- Tập trung vào một ý chính và một hành động nhỏ có thể làm ngay.",
+    "- Không giới thiệu tiểu sử tác giả.",
+    "- Không mở bằng nguồn/tác phẩm/chương.",
+    "- Không đưa sourceCredit, sourceAuthor, sourceWork vào scriptSegments.",
+    "- Không dùng lại một công thức câu dẫn cố định nếu lesson không cần.",
+    "- Tránh giọng quảng cáo, sáo rỗng, thần thánh hóa cổ nhân.",
+    "- Tránh các cụm trừu tượng kiểu: tri thức là sức mạnh, biến thành hành động, vòng lặp, niềm vui thực sự, phản xạ, bài học cuộc sống.",
+    "- Tránh kết bằng khẩu hiệu; kết bằng một câu nhắc cụ thể.",
+    "- 5 đến 10 câu, mỗi câu nên dưới 85 ký tự.",
+    "",
+    "Yêu cầu caption:",
+    "- captionBase không có hashtag.",
+    "- captions.* là captionBase cộng hashtag phù hợp từng nền tảng.",
+    "- Giữ một dòng nguồn ngắn ở cuối captionBase.",
+    "- Chỉ dùng sourceCredit cho dòng nguồn trong caption, không dùng trong script.",
+    "- Hashtag đầu tiên nên bám vào bài học, không phải tên tác giả.",
+    "",
+    "Dữ liệu lesson:",
+    JSON.stringify({
+      sourceAuthor: lesson.sourceAuthor,
+      sourceWork: lesson.sourceWork,
+      chapter: lesson.chapter,
+      title: lesson.title,
+      viTitle: lesson.viTitle,
+      hook: lesson.hook,
+      angle: lesson.angle,
+      takeaway: lesson.takeaway,
+      beats: lesson.beats,
+      sourceCredit: sourceCredit(lesson),
+      platforms: supportedPlatforms,
+      platformHashtags,
+    }, null, 2),
+  ].join("\n");
+}
+
+function extractGeminiJson(response) {
+  const text = response?.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text || "")
+    .join("")
+    .trim();
+  if (!text) throw new Error("Gemini returned an empty response.");
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("Gemini response did not contain JSON.");
+    return JSON.parse(match[0]);
+  }
+}
+
+async function callGeminiForCopy(lesson, attempt) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY. Add it to your environment before running daily generation.");
+  }
+  const model = process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash";
+  const temperature = clamp(Number(process.env.GEMINI_TEMPERATURE || 0.8), 0, 2);
+  const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`);
+  url.searchParams.set("key", apiKey);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: geminiCopyPrompt(lesson) }] }],
+      generationConfig: {
+        temperature: Number(Math.max(0.1, temperature - attempt * 0.2).toFixed(2)),
+        responseMimeType: "application/json",
+        responseSchema: geminiCopySchema,
+      },
+    }),
+  });
+  const bodyText = await res.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    body = { raw: bodyText };
+  }
+  if (!res.ok) {
+    const message = body?.error?.message || bodyText || `HTTP ${res.status}`;
+    throw new Error(`Gemini API request failed: ${message}`);
+  }
+  return extractGeminiJson(body);
+}
+
+function normalizeHashtag(value) {
+  const text = auditHumanCopy(value);
+  if (!text) return "";
+  return text.startsWith("#") ? hashtagify(text.slice(1)) : hashtagify(text);
+}
+
+function appendHashtags(caption, tags) {
+  const body = auditHumanCopy(caption);
+  const tagLine = uniqueList(tags.map(normalizeHashtag)).join(" ");
+  return tagLine ? `${body}\n\n${tagLine}` : body;
+}
+
+function stripCaptionNoise(caption, lesson) {
+  return stripSourceLeadIns(auditHumanCopy(caption), lesson)
+    .replace(/Nguồn\s*:[^\n#]+\.?/gi, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#[\p{L}\p{N}_-]+/gu, "").trim())
+    .filter((line) => line && !/^Nguồn\s*:/i.test(line))
+    .join("\n");
+}
+
+function ensureSourceLine(caption, lesson) {
+  const body = stripCaptionNoise(caption, lesson);
+  const sourceLine = `Nguồn: ${sourceCredit(lesson)}.`;
+  return body ? `${body}\n${sourceLine}` : sourceLine;
+}
+
+function stripScriptSourceMentions(segment, lesson) {
+  return stripSourceLeadIns(auditHumanCopy(segment), lesson).trim();
+}
+
+function stripSourceLeadIns(text, lesson) {
+  const author = escapeRegExp(lesson.sourceAuthor);
+  const sourceWork = escapeRegExp(lesson.sourceWork);
+  const sourceTitlePrefix = escapeRegExp(lesson.sourceTitlePrefix);
+  return String(text || "")
+    .replace(new RegExp(`\\b(?:như\\s+)?(?:${author})(?:\\s+[\\p{L}\\p{N}]+){0,6}\\s+(?:nói|nhắc|dạy|viết)(?:\\s+[\\p{L}\\p{N}]+){0,4}\\s*[:,]?\\s*`, "giu"), "")
+    .replace(new RegExp(`\\b(?:trong\\s+)?(?:${sourceWork})\\s*,?\\s*`, "giu"), "")
+    .replace(new RegExp(`\\b(?:${sourceTitlePrefix})\\s*,?\\s*`, "giu"), "");
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function validateScriptSegments(segments, lesson) {
+  const sourceTerms = [
     lesson.sourceAuthor,
     lesson.sourceWork,
-    "triết học phương Đông",
-    "bài học cuộc sống",
-    "tư duy chiến lược",
-    "kỹ năng sống",
-    "triết lý cổ nhân",
+    lesson.sourceTitlePrefix,
+  ].map(normalizeForMatch).filter(Boolean);
+  const clean = asCleanStringArray(segments, "scriptSegments", { min: 4, max: 12 })
+    .map((segment) => stripScriptSourceMentions(segment, lesson))
+    .filter(Boolean)
+    .filter((segment) => {
+      const normalized = normalizeForMatch(segment);
+      return !sourceTerms.some((term) => normalized.includes(term));
+    })
+    .map((segment) => ensureSentence(segment));
+  const scriptText = normalizeForMatch(clean.join(" "));
+  const introText = normalizeForMatch(clean.slice(0, 2).join(" "));
+  const blockedIntroTerms = [
+    lesson.sourceAuthor,
+    lesson.sourceWork,
+    lesson.sourceTitlePrefix,
+    "sinh ra",
+    "tieu su",
+    "tac gia",
+  ].map(normalizeForMatch).filter(Boolean);
+  if (blockedIntroTerms.some((term) => introText.includes(term))) {
+    throw new Error("Gemini script includes author/source intro instead of lesson content.");
+  }
+  const stiffPhrases = [
+    "tri thuc la suc manh",
+    "bien kien thuc thanh hanh dong",
+    "vong lap",
+    "niem vui thuc su",
+    "luyen no thanh phan xa",
+    "bai hoc cuoc song",
+  ];
+  if (stiffPhrases.some((phrase) => scriptText.includes(phrase))) {
+    throw new Error("Gemini script sounds too abstract/formulaic; retrying for a more human version.");
+  }
+  const totalChars = clean.join(" ").length;
+  if (totalChars < 180 || totalChars > 850) {
+    throw new Error(`Gemini script length ${totalChars} chars is outside the expected range.`);
+  }
+  return clean;
+}
+
+function reorderAuthorTagsLast(tags, lesson) {
+  const authorTag = normalizeHashtag(lesson.sourceAuthor);
+  const sourceTag = normalizeHashtag(lesson.sourceTitlePrefix);
+  const chapterTag = normalizeHashtag(`chuong ${lesson.chapter} ${lesson.sourceAuthor}`);
+  const authorish = new Set([authorTag, sourceTag, chapterTag].filter(Boolean));
+  const normalized = uniqueList(tags.map(normalizeHashtag));
+  return [
+    ...normalized.filter((tag) => !authorish.has(tag)),
+    ...normalized.filter((tag) => authorish.has(tag)),
+  ];
+}
+
+function validateGeminiCopy(raw, lesson) {
+  const title = asCleanString(raw?.title || lesson.hook, "title").slice(0, 90);
+  const scriptSegments = validateScriptSegments(raw?.scriptSegments, lesson);
+  const captionBase = ensureSourceLine(asCleanString(raw?.captionBase, "captionBase"), lesson);
+  const lessonTags = [
+    normalizeHashtag(lesson.hook),
+    normalizeHashtag(lesson.takeaway),
+    normalizeHashtag(lesson.sourceWork),
+  ];
+  const hashtags = reorderAuthorTagsLast([
+    ...lessonTags,
+    ...asCleanStringArray(raw?.hashtags, "hashtags", { min: 5, max: 18 }),
+    ...supportedPlatforms.flatMap((platform) => platformHashtags[platform]),
+  ], lesson).slice(0, 18);
+  const platformCaption = (platform, limit) => {
+    const generated = raw?.captions?.[platform];
+    const body = ensureSourceLine(generated || captionBase, lesson);
+    return appendHashtags(body, uniqueList([...platformHashtags[platform], ...hashtags]).slice(0, limit));
+  };
+  const captions = {
+    tiktok: platformCaption("tiktok", 11),
+    "youtube-short": platformCaption("youtube-short", 10),
+    "facebook-reel": platformCaption("facebook-reel", 10),
+  };
+  const youtubeTags = uniqueList([
+    ...asCleanStringArray(raw?.youtubeTags, "youtubeTags", { min: 5, max: 18 }),
     lesson.hook,
     lesson.viTitle,
-    lesson.title,
-    `Chương ${lesson.chapter}`,
-  ]);
-
+    lesson.sourceWork,
+  ]).slice(0, 18);
   return {
-    baseCaption: captions.tiktok,
+    title,
+    scriptSegments,
+    captionBase,
     captions,
-    hashtags: uniqueList([...coreHashtags, ...platformHashtags.tiktok, ...platformHashtags["youtube-short"], ...platformHashtags["facebook-reel"]]),
+    hashtags,
     youtubeTags,
   };
 }
 
-function postMetadata(lesson, platform, duration) {
-  const title = `${lesson.sourceTitlePrefix}: ${lesson.hook}`;
-  const postPack = viralPostPack(lesson);
+async function generateCopyPack(lesson) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("Missing GEMINI_API_KEY. Add it to your environment before running daily generation.");
+  }
+  const attempts = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 2) + 1);
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return validateGeminiCopy(await callGeminiForCopy(lesson, attempt), lesson);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        console.warn(`Gemini copy attempt ${attempt + 1}/${attempts} failed: ${error.message}`);
+      }
+    }
+  }
+  throw new Error(`Gemini copy generation failed after ${attempts} attempt(s): ${lastError?.message || "unknown error"}`);
+}
+
+function postMetadata(lesson, platform, duration, copyPack) {
   return {
     platform: "all",
-    platforms: ["tiktok", "youtube-short", "facebook-reel"],
-    title,
-    caption: postPack.baseCaption,
-    captions: postPack.captions,
+    platforms: supportedPlatforms,
+    title: copyPack.title,
+    caption: copyPack.captions.tiktok,
+    captions: copyPack.captions,
     duration,
     language: "vi",
     aspectRatio: "9:16",
@@ -806,8 +995,8 @@ function postMetadata(lesson, platform, duration) {
       viTitle: lesson.viTitle,
       sourceUrl: lesson.sourceUrl,
     },
-    hashtags: postPack.hashtags,
-    youtubeTags: postPack.youtubeTags,
+    hashtags: copyPack.hashtags,
+    youtubeTags: copyPack.youtubeTags,
   };
 }
 
@@ -1226,14 +1415,15 @@ async function readSubjectOutlines(file) {
 async function prepareProject(lesson, platform) {
   const slug = `video-${slugify(lesson.title)}`;
   const dir = path.join(outRoot, slug);
+  const copyPack = await generateCopyPack(lesson);
+  const narration = narrationBundle(copyPack.scriptSegments);
+  const text = narration.text;
   await mkdir(path.join(dir, "assets"), { recursive: true });
-
   const imageSources = await downloadLessonImages(lesson, dir);
   const subjectOutlines = await generateSubjectOutlines(dir);
-  const narration = narrationBundle(lesson);
-  const text = narration.text;
   await writeFile(path.join(dir, "script.txt"), text, "utf8");
   await writeFile(path.join(dir, "subtitle-segments.json"), JSON.stringify(narration.segments, null, 2), "utf8");
+  await writeFile(path.join(dir, "generated-copy.json"), JSON.stringify(copyPack, null, 2), "utf8");
   await writeFile(path.join(dir, "image-sources.json"), JSON.stringify(imageSources, null, 2), "utf8");
   await writeFile(path.join(dir, "hyperframes.json"), JSON.stringify({
     $schema: "https://hyperframes.heygen.com/schema/hyperframes.json",
@@ -1281,7 +1471,7 @@ async function prepareProject(lesson, platform) {
   ], projectRoot);
 
   await writeFile(path.join(dir, "index.html"), renderHtml({ lesson, platform, imageSources, duration, captionTracks, subjectOutlines }), "utf8");
-  await writeFile(path.join(dir, "post.json"), JSON.stringify(postMetadata(lesson, platform, duration), null, 2), "utf8");
+  await writeFile(path.join(dir, "post.json"), JSON.stringify(postMetadata(lesson, platform, duration, copyPack), null, 2), "utf8");
 
   return {
     dir,
@@ -1295,8 +1485,17 @@ async function prepareProject(lesson, platform) {
   };
 }
 
-const picked = pickLessons();
-const lesson = picked[Number(slot) - 1];
-const jobs = [await prepareProject(lesson, distribution)];
-await writeFile(path.join(outRoot, "manifest.json"), JSON.stringify({ date, slot, slotsPerDay, seriesStartDate, jobs }, null, 2), "utf8");
-console.log(JSON.stringify({ date, slot, slotsPerDay, seriesStartDate, jobs }, null, 2));
+async function main() {
+  const picked = pickLessons();
+  const lesson = picked[Number(slot) - 1];
+  const jobs = [await prepareProject(lesson, distribution)];
+  await writeFile(path.join(outRoot, "manifest.json"), JSON.stringify({ date, slot, slotsPerDay, seriesStartDate, jobs }, null, 2), "utf8");
+  console.log(JSON.stringify({ date, slot, slotsPerDay, seriesStartDate, jobs }, null, 2));
+}
+
+try {
+  await main();
+} catch (error) {
+  console.error(`daily:generate failed: ${error.message}`);
+  process.exitCode = 1;
+}
