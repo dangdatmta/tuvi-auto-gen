@@ -27,7 +27,7 @@ const lessons = [
     sourceOrder: 1,
   })),
   ...extraLessons.map((lesson, index) => normalizeLesson(lesson, { sourceOrder: 2 + index })),
-];
+].filter((lesson) => lesson.disabled !== true);
 const slotsPerDay = 8;
 const date = process.env.VIDEO_DATE || vietnamDate();
 const slot = normalizeSlot(process.env.RUN_SLOT || inferSlotFromUtcHour(new Date().getUTCHours()));

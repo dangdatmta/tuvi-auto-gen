@@ -21,7 +21,8 @@
       "Đừng gọi liều lĩnh là dũng cảm.",
       "Kế hoạch tốt biến rủi ro thành lợi thế.",
       "Thắng trước khi đánh, rồi mới bước vào trận."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "II",
@@ -45,7 +46,8 @@
       "Không phải việc gì cũng cần thêm thời gian.",
       "Có lúc chiến thắng thuộc về người kết thúc đúng lúc.",
       "Tốc độ, khi đúng hướng, là một loại sức mạnh."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "III",
@@ -69,7 +71,8 @@
       "Đổi cuộc chơi. Cắt nguồn động lực. Làm họ thấy không đáng.",
       "Có những trận thắng bằng một câu nói đúng lúc.",
       "Đừng thắng bằng tiếng ồn nếu có thể thắng bằng thế cờ."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "IV",
@@ -93,7 +96,8 @@
       "Khi bạn không thể bị đánh gục, bạn có thời gian chờ cơ hội.",
       "Cơ hội không đến với người đang hoảng loạn.",
       "Phòng thủ tốt là nền của cú đánh mạnh."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "V",
@@ -117,7 +121,8 @@
       "Đừng chỉ hỏi: tôi có cố đủ không?",
       "Hãy hỏi: tôi đang đứng ở thế nào?",
       "Dùng thế, không chỉ dùng sức."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "VI",
@@ -141,7 +146,8 @@
       "Nếu họ mạnh về tiền, hãy thắng bằng tốc độ.",
       "Nếu họ mạnh về tiếng ồn, hãy thắng bằng sự chính xác.",
       "Chiến lược là chọn đúng điểm để tung một đòn đủ mạnh."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "VII",
@@ -165,7 +171,8 @@
       "Người có chiến lược nhìn cả địa hình.",
       "Không phải đường nào ngắn cũng nhanh.",
       "Người khôn biết đi vòng để đến trước."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "IX",
@@ -189,7 +196,8 @@
       "Một câu trả lời chậm. Một lịch hẹn bị đổi. Một thái độ khác thường.",
       "Người thường chỉ nhìn sự kiện.",
       "Người giỏi nhìn tín hiệu trước sự kiện."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "X",
@@ -213,7 +221,8 @@
       "Đừng chỉ hỏi: mình có giỏi không?",
       "Hãy hỏi: nơi này có hợp để đánh không?",
       "Sai địa hình, đúng nỗ lực cũng thành lãng phí."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "XI",
@@ -237,7 +246,8 @@
       "Không phải để liều mạng.",
       "Mà để ép bản thân nghiêm túc.",
       "Cam kết đúng cách biến sợ hãi thành hành động."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "XII",
@@ -261,7 +271,8 @@
       "Một quyết định quá nóng có thể đốt sạch uy tín.",
       "Không phải đòn mạnh nào cũng nên tung ra.",
       "Sức mạnh phải đi cùng kiểm soát."
-    ]
+    ],
+    "disabled": true
   },
   {
     "chapter": "XIII",
@@ -285,6 +296,7 @@
       "Biết thời điểm nào không nên xuất hiện.",
       "Thông tin tốt giúp bạn ra đòn ít hơn nhưng trúng hơn.",
       "Biết đúng thứ cần biết là lợi thế đắt nhất."
-    ]
+    ],
+    "disabled": true
   }
 ]

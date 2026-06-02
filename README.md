@@ -11,7 +11,7 @@ The project generates one vertical MP4 per run, searches fresh historical/classi
 - Publisher: `automation/publish-social.mjs`
 - Main docs: `automation/README.md`
 
-The scheduled workflow runs every 3 hours in Asia/Ho_Chi_Minh. It uses all Sun Tzu lessons first, then continues into Confucius/Laozi lessons from `automation/extra-lessons.json`.
+The scheduled workflow runs every 3 hours in Asia/Ho_Chi_Minh. It skips lessons marked with `disabled: true`, then rotates through the active Chinese classical-wisdom pool in order.
 
 ## Local Test
 
