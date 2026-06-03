@@ -63,6 +63,7 @@ The workflow renders videos, uploads artifacts, and can publish or upload drafts
 
 Required platform credentials:
 
+- Google Cloud / Vertex AI: `GCP_SERVICE_ACCOUNT_KEY` as a service account JSON key, plus optional `VERTEX_PROJECT_ID` and `VERTEX_LOCATION` secrets. The service account needs permission to call Vertex AI Gemini, for example the Vertex AI User role on the project.
 - TikTok: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, and `TIKTOK_REFRESH_TOKEN` with Content Posting API access and `video.upload` scope. The script refreshes a short-lived access token at upload time and sends the video to the creator's TikTok inbox as a draft.
 - YouTube: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` with `youtube.upload` scope.
 - Facebook: `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN` with Page/Reels publishing permissions.

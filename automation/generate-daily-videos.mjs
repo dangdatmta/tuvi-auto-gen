@@ -780,19 +780,50 @@ function extractGeminiJson(response) {
   }
 }
 
-async function callGeminiForCopy(lesson, attempt) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing GEMINI_API_KEY. Add it to your environment before running daily generation.");
+function requireVertexConfig() {
+  const projectId = process.env.VERTEX_PROJECT_ID?.trim();
+  const location = process.env.VERTEX_LOCATION?.trim();
+  if (!projectId || !location) {
+    throw new Error("Missing Vertex AI config. Set VERTEX_PROJECT_ID and VERTEX_LOCATION before running daily generation.");
   }
+  return { projectId, location };
+}
+
+function vertexAccessToken() {
+  const envToken = process.env.VERTEX_ACCESS_TOKEN?.trim();
+  if (envToken) return envToken;
+
+  const result = spawnSync("gcloud", ["auth", "application-default", "print-access-token", "--quiet"], {
+    encoding: "utf8",
+    env: { ...process.env },
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error([
+      "Unable to get Vertex AI access token from gcloud ADC.",
+      "Run: gcloud auth application-default login",
+      result.error?.message || result.stderr || result.stdout || "",
+    ].filter(Boolean).join(" "));
+  }
+  const token = result.stdout.trim();
+  if (!token) {
+    throw new Error("gcloud returned an empty Vertex AI access token. Run: gcloud auth application-default login");
+  }
+  return token;
+}
+
+async function callGeminiForCopy(lesson, attempt) {
+  const { projectId, location } = requireVertexConfig();
+  const accessToken = vertexAccessToken();
   const model = process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash";
   const temperature = clamp(Number(process.env.GEMINI_TEMPERATURE || 0.8), 0, 2);
-  const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`);
-  url.searchParams.set("key", apiKey);
+  const url = new URL(`https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`);
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "authorization": `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: geminiCopyPrompt(lesson) }] }],
       generationConfig: {
@@ -959,9 +990,7 @@ function validateGeminiCopy(raw, lesson) {
 }
 
 async function generateCopyPack(lesson) {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY. Add it to your environment before running daily generation.");
-  }
+  requireVertexConfig();
   const attempts = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 2) + 1);
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {

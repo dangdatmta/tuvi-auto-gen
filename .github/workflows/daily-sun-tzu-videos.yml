@@ -108,11 +108,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install vieneu rembg pillow opencv-python-headless numpy
 
+      - name: Authenticate to Google Cloud
+        id: google-auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          token_format: access_token
+
       - name: Generate daily project folders
         env:
           VIDEO_DATE: ${{ steps.slot.outputs.video_date }}
           RUN_SLOT: ${{ steps.slot.outputs.run_slot }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VERTEX_PROJECT_ID: ${{ secrets.VERTEX_PROJECT_ID || 'gen-lang-client-0596381481' }}
+          VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION || 'us-central1' }}
+          VERTEX_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
           GEMINI_TEXT_MODEL: ${{ secrets.GEMINI_TEXT_MODEL || 'gemini-2.5-flash' }}
           GEMINI_TEMPERATURE: ${{ secrets.GEMINI_TEMPERATURE || '0.8' }}
           GEMINI_MAX_RETRIES: ${{ secrets.GEMINI_MAX_RETRIES || '2' }}
