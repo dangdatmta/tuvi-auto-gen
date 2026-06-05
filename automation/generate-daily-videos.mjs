@@ -32,6 +32,10 @@ const slotsPerDay = 8;
 const date = process.env.VIDEO_DATE || vietnamDate();
 const slot = normalizeSlot(process.env.RUN_SLOT || inferSlotFromUtcHour(new Date().getUTCHours()));
 const distribution = { id: "social", label: "TikTok / Shorts / Reels" };
+const narrationDurationMin = Number(process.env.NARRATION_DURATION_MIN || 70);
+const narrationDurationMax = Number(process.env.NARRATION_DURATION_MAX || 92);
+const scriptCharMin = Number(process.env.SCRIPT_CHAR_MIN || 1050);
+const scriptCharMax = Number(process.env.SCRIPT_CHAR_MAX || 1320);
 
 const outRoot = path.join(projectRoot, "daily", date, `slot-${slot}`);
 const imageUserAgent = "Mozilla/5.0 (compatible; sun-tzu-video-bot/1.0; +https://github.com/heygen-com/hyperframes)";
@@ -587,6 +591,19 @@ function ensureSentence(text) {
   return /[.!?…]$/.test(value) ? value : `${value}.`;
 }
 
+function capitalizeFirstLetter(text) {
+  return String(text || "").replace(/\p{L}/u, (letter) => letter.toLocaleUpperCase("vi-VN"));
+}
+
+function normalizeNarrationSegment(text) {
+  return capitalizeFirstLetter(ensureSentence(text));
+}
+
+function isPunctuationOnly(text) {
+  const clean = auditHumanCopy(text);
+  return !normalizeForMatch(clean);
+}
+
 function auditHumanCopy(text) {
   return String(text || "")
     .replace(/Bài học hôm nay:\s*/gi, "")
@@ -606,7 +623,7 @@ function asCleanString(value, fieldName) {
 
 function asCleanStringArray(value, fieldName, { min = 1, max = 20 } = {}) {
   if (!Array.isArray(value)) throw new Error(`Gemini copy field ${fieldName} must be an array.`);
-  const items = value.map((item) => auditHumanCopy(item)).filter(Boolean);
+  const items = value.map((item) => auditHumanCopy(item)).filter((item) => item && !isPunctuationOnly(item));
   if (items.length < min) throw new Error(`Gemini copy field ${fieldName} needs at least ${min} item(s).`);
   return items.slice(0, max);
 }
@@ -619,11 +636,12 @@ function splitSentences(text) {
   return String(text || "")
     .split(/(?<=[.!?])\s+/)
     .map((part) => auditHumanCopy(part))
-    .filter(Boolean);
+    .filter((part) => part && !isPunctuationOnly(part));
 }
 
 function splitLongCaption(text, maxChars = 68) {
   const clean = auditHumanCopy(text);
+  if (!clean || isPunctuationOnly(clean)) return [];
   if (clean.length <= maxChars) return [clean];
   const words = clean.split(/\s+/).filter(Boolean);
   const chunks = [];
@@ -638,13 +656,16 @@ function splitLongCaption(text, maxChars = 68) {
     }
   }
   if (current) chunks.push(current);
-  return chunks;
+  return chunks.filter((chunk) => chunk && !isPunctuationOnly(chunk));
 }
 
 function narrationBundle(scriptSegments) {
-  const parts = asCleanStringArray(scriptSegments, "scriptSegments", { min: 4, max: 16 })
-    .map((part) => ensureSentence(part));
+  const parts = asCleanStringArray(scriptSegments, "scriptSegments", { min: 12, max: 18 })
+    .map((part) => normalizeNarrationSegment(part));
   const segments = parts.flatMap((part) => splitSentences(part).flatMap((sentence) => splitLongCaption(sentence)));
+  if (segments.some((segment) => isPunctuationOnly(segment))) {
+    throw new Error("Narration contains a punctuation-only caption segment.");
+  }
   return {
     text: auditHumanCopy(segments.join(" ")),
     segments,
@@ -685,11 +706,11 @@ const geminiCopySchema = {
     },
     scriptSegments: {
       type: "array",
-      minItems: 5,
-      maxItems: 10,
+      minItems: 12,
+      maxItems: 18,
       items: {
         type: "string",
-        description: "One concise Vietnamese narration sentence.",
+        description: "One connected Vietnamese narration beat in a sharp everyday voice.",
       },
     },
     captionBase: {
@@ -723,14 +744,19 @@ const geminiCopySchema = {
 
 function geminiCopyPrompt(lesson) {
   return [
-    "Bạn là một người viết video ngắn tiếng Việt, giọng đời thường.",
+    "Bạn là một người viết narration video ngắn tiếng Việt, giọng đời thường sắc bén.",
     "Hãy viết nội dung social video từ dữ liệu lesson bên dưới.",
     "",
     "Yêu cầu narration:",
-    "- Viết như một người đang nói với một người khác, không như bài văn mẫu.",
+    "- Viết như một người từng trải đang nói với một người khác, không như bài văn mẫu.",
+    "- Target 75 đến 90 giây khi đọc thành tiếng.",
+    "- Viết 12 đến 18 đoạn/câu, tổng khoảng 1050 đến 1320 ký tự.",
+    "- Đi theo arc rõ: hook đời thường, tình huống cụ thể, mâu thuẫn/cái giá, diễn giải bài học, hành động nhỏ có thể làm ngay, câu chốt nhớ lâu.",
+    "- Mỗi đoạn phải nối ý với đoạn trước; đừng xếp nhiều câu cụt như khẩu hiệu.",
     "- Mở bằng một tình huống nhỏ, một nhận xét có hơi người, hoặc một câu nói thẳng.",
+    "- Dùng hình ảnh đời sống cụ thể: cuộc họp, tin nhắn, deadline, tiền bạc, uy tín, thói quen, một quyết định bị trì hoãn.",
     "- Dùng từ bình thường: việc, chuyện, ghi chú, quên, làm thử, nhớ lại.",
-    "- Có câu rất ngắn xen câu dài hơn; đừng để câu nào cũng cùng một nhịp.",
+    "- Có câu ngắn xen câu dài hơn; đừng để câu nào cũng cùng một nhịp.",
     "- Có thể dùng 'mình', 'bạn' vừa phải nếu hợp ngữ cảnh.",
     "- Tập trung vào một ý chính và một hành động nhỏ có thể làm ngay.",
     "- Không giới thiệu tiểu sử tác giả.",
@@ -739,8 +765,8 @@ function geminiCopyPrompt(lesson) {
     "- Không dùng lại một công thức câu dẫn cố định nếu lesson không cần.",
     "- Tránh giọng quảng cáo, sáo rỗng, thần thánh hóa cổ nhân.",
     "- Tránh các cụm trừu tượng kiểu: tri thức là sức mạnh, biến thành hành động, vòng lặp, niềm vui thực sự, phản xạ, bài học cuộc sống.",
+    "- Tránh các câu lặp máy móc kiểu: người khôn không đợi ai ép, việc này nghe đơn giản nhưng tích lại mạnh, rồi đi tiếp thôi.",
     "- Tránh kết bằng khẩu hiệu; kết bằng một câu nhắc cụ thể.",
-    "- 5 đến 10 câu, mỗi câu nên dưới 85 ký tự.",
     "",
     "Yêu cầu caption:",
     "- captionBase không có hashtag.",
@@ -900,14 +926,18 @@ function validateScriptSegments(segments, lesson) {
     lesson.sourceWork,
     lesson.sourceTitlePrefix,
   ].map(normalizeForMatch).filter(Boolean);
-  const clean = asCleanStringArray(segments, "scriptSegments", { min: 4, max: 12 })
+  const clean = asCleanStringArray(segments, "scriptSegments", { min: 12, max: 18 })
     .map((segment) => stripScriptSourceMentions(segment, lesson))
     .filter(Boolean)
+    .filter((segment) => !isPunctuationOnly(segment))
     .filter((segment) => {
       const normalized = normalizeForMatch(segment);
       return !sourceTerms.some((term) => normalized.includes(term));
     })
-    .map((segment) => ensureSentence(segment));
+    .map((segment) => normalizeNarrationSegment(segment));
+  if (clean.length < 12) {
+    throw new Error(`Gemini script needs at least 12 usable narration segment(s); received ${clean.length}.`);
+  }
   const scriptText = normalizeForMatch(clean.join(" "));
   const introText = normalizeForMatch(clean.slice(0, 2).join(" "));
   const blockedIntroTerms = [
@@ -928,12 +958,18 @@ function validateScriptSegments(segments, lesson) {
     "niem vui thuc su",
     "luyen no thanh phan xa",
     "bai hoc cuoc song",
+    "nguoi khon khong doi ai ep",
+    "nguoi khon dau doi doi ep",
+    "nguoi khon nguoi ta khong doi",
+    "viec nay nghe don gian nhung tich lai thi manh",
+    "viec nay trong chang to tat nhung tich lai thi rat manh",
+    "roi di tiep thoi",
   ];
   if (stiffPhrases.some((phrase) => scriptText.includes(phrase))) {
     throw new Error("Gemini script sounds too abstract/formulaic; retrying for a more human version.");
   }
   const totalChars = clean.join(" ").length;
-  if (totalChars < 180 || totalChars > 850) {
+  if (totalChars < scriptCharMin || totalChars > scriptCharMax) {
     throw new Error(`Gemini script length ${totalChars} chars is outside the expected range.`);
   }
   return clean;
@@ -1304,6 +1340,12 @@ function mediaDurationSeconds(file) {
   return Number(duration.toFixed(3));
 }
 
+function validateNarrationDuration(duration) {
+  if (duration < narrationDurationMin || duration > narrationDurationMax) {
+    throw new Error(`Narration duration ${duration}s is outside the expected ${narrationDurationMin}-${narrationDurationMax}s range.`);
+  }
+}
+
 function parseJsonFromOutput(output) {
   const text = String(output || "").trim();
   try {
@@ -1509,11 +1551,12 @@ async function prepareProject(lesson, platform) {
       "-ar", "48000", "-ac", "2", path.join(dir, "assets", "narration.wav"),
     ], dir);
     duration = mediaDurationSeconds(path.join(dir, "assets", "narration.wav"));
+    validateNarrationDuration(duration);
     const { transcript, words } = transcribeNarration(dir);
     await writeFile(path.join(dir, "transcript.json"), JSON.stringify(transcript, null, 2), "utf8");
     captionTracks = captionTracksFromTranscript(narration.segments, words, duration);
   } else {
-    duration = Math.max(1, Math.ceil(text.length / 18));
+    duration = Math.max(1, Math.ceil(text.length / 15));
     run("ffmpeg", ["-y", "-f", "lavfi", "-i", `anullsrc=r=48000:cl=stereo`, "-t", String(duration), path.join(dir, "assets", "narration.wav")], dir);
     captionTracks = fallbackCaptionTracks(narration.segments, duration);
   }
