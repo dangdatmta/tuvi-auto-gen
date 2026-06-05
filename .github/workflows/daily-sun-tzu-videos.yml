@@ -137,6 +137,11 @@ jobs:
         run: node automation/generate-daily-videos.mjs
 
       - name: Render generated video
+        env:
+          PRODUCER_ENABLE_STREAMING_ENCODE: "false"
+          FFMPEG_ENCODE_TIMEOUT_MS: "1200000"
+          FFMPEG_PROCESS_TIMEOUT_MS: "1200000"
+          FFMPEG_STREAMING_TIMEOUT_MS: "1200000"
         run: |
           set -euo pipefail
           DATE_DIR="${{ steps.slot.outputs.date_dir }}"
