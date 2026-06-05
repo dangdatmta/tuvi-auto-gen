@@ -178,7 +178,9 @@ function hookHtml(text) {
   const splitAt = Math.max(1, Math.ceil(words.length / 2));
   const lead = words.slice(0, splitAt).join(" ");
   const punch = words.slice(splitAt).join(" ");
-  return punch ? `${lead}<em>${punch}</em>` : lead;
+  return punch
+    ? `<span>${escapeHtml(lead)}</span><em>${escapeHtml(punch)}</em>`
+    : `<span>${escapeHtml(lead)}</span>`;
 }
 
 function escapeHtml(value) {
@@ -1136,10 +1138,14 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
     const outline = subjectOutlines.get(img.file);
     if (!outline?.paths?.length) return "";
     const start = +(i * sceneDur + 0.42).toFixed(2);
-    const fadeAt = +(Math.min(duration - 0.6, (i + 1) * sceneDur - 1.3)).toFixed(2);
-    return `tl.to("#scene-${i + 1} .subject-outline", { "--outline-offset": 0, opacity: 0.82, duration: 0.92, ease: "power2.out" }, ${start});
-      tl.to("#scene-${i + 1} .subject-outline", { opacity: 0.32, duration: 0.4, ease: "sine.inOut", overwrite: "auto" }, ${start + 1.2});
-      tl.to("#scene-${i + 1} .subject-outline", { opacity: 0, duration: 0.32, ease: "power1.in", overwrite: "auto" }, ${fadeAt});`;
+    const sceneEnd = i === 6 ? duration : (i + 1) * sceneDur;
+    const drawDuration = Math.min(0.92, Math.max(0.28, sceneEnd - start - 0.78));
+    const dimStart = +(Math.min(start + drawDuration + 0.24, sceneEnd - 0.72)).toFixed(2);
+    const fadeAt = +(Math.max(dimStart + 0.42, Math.min(duration - 0.6, sceneEnd - 0.44))).toFixed(2);
+    return `tl.to("#scene-${i + 1} .subject-outline", { "--outline-offset": 0, duration: ${drawDuration.toFixed(2)}, ease: "power2.out" }, ${start});
+      tl.to("#scene-${i + 1} .subject-outline", { opacity: 0.82, duration: 0.22, ease: "power2.out", overwrite: "auto" }, ${start});
+      tl.to("#scene-${i + 1} .subject-outline", { opacity: 0.32, duration: 0.34, ease: "sine.inOut", overwrite: "auto" }, ${dimStart});
+      tl.to("#scene-${i + 1} .subject-outline", { opacity: 0, duration: 0.28, ease: "power1.in", overwrite: "auto" }, ${fadeAt});`;
   }).filter(Boolean).join("\n      ");
 
   const captionPulseOpacity = Math.min(1, subjectLayerOpacity + 0.07).toFixed(2);
@@ -1181,8 +1187,9 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
       .scene::after { content: ""; position: absolute; z-index: 3; inset: 0; background: radial-gradient(ellipse at center, transparent 34%, rgba(0,0,0,0.76) 100%), repeating-linear-gradient(0deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 5px); opacity: 0.82; pointer-events: none; }
       .scene-light { position: absolute; z-index: 4; top: -18%; bottom: -18%; left: -32%; width: 44%; transform: skewX(-18deg); background: linear-gradient(90deg, transparent 0%, rgba(255, 224, 147, 0.32) 46%, transparent 100%); mix-blend-mode: soft-light; opacity: 0.1; pointer-events: none; will-change: transform, opacity; }
       .scene-vignette-pulse { position: absolute; z-index: 5; inset: 0; opacity: 0; background: radial-gradient(circle at 50% 37%, rgba(255, 223, 137, 0.28), transparent 24%), radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.72) 100%); mix-blend-mode: soft-light; pointer-events: none; }
-      .hook { position: absolute; z-index: 22; top: auto; left: 50px; right: 50px; bottom: 190px; height: 310px; color: #fff8e7; font-size: 86px; font-weight: 950; line-height: 0.96; text-align: center; text-transform: uppercase; text-shadow: 0 4px 0 rgba(142, 12, 26, 0.96), 0 22px 50px rgba(0,0,0,0.78); filter: none; }
-      .hook em { display: block; color: #ffdd57; font-style: normal; }
+      .hook { --hook-alpha: 1; --hook-y: 0px; --hook-blur: 0px; position: absolute; z-index: 22; top: auto; left: 50px; right: 50px; bottom: 156px; height: 386px; padding-top: 18px; color: #fff8e7; font-size: 86px; font-weight: 950; line-height: 0.96; text-align: center; text-transform: uppercase; text-shadow: 0 4px 0 rgba(142, 12, 26, 0.96), 0 22px 50px rgba(0,0,0,0.78); filter: none; }
+      .hook span, .hook em { display: block; overflow-wrap: normal; opacity: var(--hook-alpha); transform: translateY(var(--hook-y)); filter: blur(var(--hook-blur)); }
+      .hook em { color: #ffdd57; font-style: normal; }
       .subtitle { position: absolute; z-index: 20; top: 50%; left: 0; right: 0; bottom: auto; height: 360px; transform: translateY(-50%); overflow: visible; display: flex; justify-content: center; align-items: center; pointer-events: none; }
       .subtitle span { position: absolute; left: 44px; right: 44px; top: 50%; bottom: auto; display: block; max-width: 992px; margin: 0 auto; padding: 22px 30px 25px; border: 4px solid rgba(224, 57, 137, 0.78); border-radius: 9px; background: rgba(24, 8, 28, 0.9); color: #fff5ff; font-size: 48px; font-weight: 950; line-height: 1.06; text-align: center; text-shadow: 0 2px 0 rgba(255, 71, 159, 0.65), 0 5px 14px rgba(0,0,0,0.88); box-shadow: 0 0 0 2px rgba(255,255,255,0.08), 0 20px 52px rgba(0,0,0,0.56); }
       .grain { position: absolute; z-index: 10; inset: 0; opacity: 0.14; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 3px), repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 6px); mix-blend-mode: soft-light; pointer-events: none; }
@@ -1205,6 +1212,29 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
     </div>
     <script>
       window.__timelines = window.__timelines || {};
+      const fitHeroHook = () => {
+        const hook = document.getElementById("hero-hook");
+        if (!hook) return;
+        const minSize = 58;
+        const maxSize = 86;
+        const scaleSafety = 1.035;
+        const fits = (size) => {
+          hook.style.fontSize = size + "px";
+          const maxWidth = hook.clientWidth / scaleSafety;
+          const maxHeight = hook.clientHeight / scaleSafety;
+          const lines = Array.from(hook.children);
+          return hook.scrollHeight <= maxHeight && lines.every((line) => line.scrollWidth <= maxWidth);
+        };
+        let low = minSize;
+        let high = maxSize;
+        for (let step = 0; step < 8; step += 1) {
+          const mid = (low + high) / 2;
+          if (fits(mid)) low = mid;
+          else high = mid;
+        }
+        hook.style.fontSize = Math.max(minSize, Math.floor(low)) + "px";
+      };
+      fitHeroHook();
       document.querySelectorAll(".subject-outline").forEach((svg) => {
         const paths = Array.from(svg.querySelectorAll(".subject-path"));
         const maxLength = Math.max(0, ...paths.map((path) => path.getTotalLength()));
@@ -1218,10 +1248,8 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
       ${transitionFlashes}
       ${outlineTweens}
       tl.fromTo("#dust-veil", { x: -38, y: 24, opacity: 0.16 }, { x: 44, y: -32, opacity: 0.28, duration: ${duration}, ease: "sine.inOut" }, 0);
-      tl.set("#hero-hook", { opacity: 1, y: 0, scale: 1, filter: "none" }, 0);
       tl.fromTo("#hero-hook", { y: 0, scale: 1 }, { y: -8, scale: 1.018, duration: 1.15, ease: "sine.inOut" }, 0);
-      tl.to("#hero-hook", { opacity: 0, y: -32, filter: "blur(10px)", duration: 0.24, ease: "power2.in", overwrite: "auto" }, 2.68);
-      tl.set("#hero-hook", { opacity: 0 }, 3.00);
+      tl.to("#hero-hook", { "--hook-alpha": 0, "--hook-y": "-24px", "--hook-blur": "10px", duration: 0.24, ease: "power2.in", overwrite: "auto" }, 2.68);
       const captionBeats = [
         ${capBeats}
       ];
