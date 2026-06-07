@@ -2,7 +2,7 @@
 
 Automated 9:16 short-video generation and publishing pipeline for Vietnamese ancient-wisdom content.
 
-The project generates one vertical MP4 per run, searches fresh historical/classical images from the internet, builds a cinematic HyperFrames composition, creates VieNeu narration, mixes background music, and can publish the same video to TikTok, YouTube Shorts, and Facebook Reels.
+The project generates one vertical MP4 per run, plans flexible visuals from the narration, generates matching cinematic images with Vertex AI Imagen, builds a HyperFrames composition, creates VieNeu narration, mixes background music, and can publish the same video to TikTok, YouTube Shorts, and Facebook Reels.
 
 ## Automation
 
@@ -24,7 +24,7 @@ Render the generated project:
 ```bash
 cd daily/2026-05-25/slot-1/video-laying-plans
 npx --yes hyperframes@0.6.40 lint
-npx --yes hyperframes@0.6.40 render --output ../renders/video-laying-plans.mp4 --quality high --fps 30
+npx --yes hyperframes@0.6.40 render --output ../renders/video-laying-plans.mp4 --video-bitrate 5M --fps 30
 ```
 
 Publish dry-run:

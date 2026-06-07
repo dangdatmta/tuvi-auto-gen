@@ -127,7 +127,7 @@ jobs:
           GEMINI_MAX_RETRIES: ${{ secrets.GEMINI_MAX_RETRIES || '2' }}
           PYTHON_BIN: python
           VIENEU_VOICE: Tuyen
-          ENABLE_SUBJECT_OUTLINE: "true"
+          ENABLE_SUBJECT_OUTLINE: ${{ secrets.ENABLE_SUBJECT_OUTLINE || 'false' }}
           ENABLE_SUBJECT_LAYERS: "true"
           SUBJECT_MODEL: isnet-general-use
           SUBJECT_MIN_AREA_RATIO: "0.015"
@@ -142,15 +142,31 @@ jobs:
           FFMPEG_ENCODE_TIMEOUT_MS: "1200000"
           FFMPEG_PROCESS_TIMEOUT_MS: "1200000"
           FFMPEG_STREAMING_TIMEOUT_MS: "1200000"
+          RENDER_PRESET: ${{ secrets.RENDER_PRESET || 'social-balanced' }}
+          RENDER_VIDEO_BITRATE: ${{ secrets.RENDER_VIDEO_BITRATE || '5M' }}
+          RENDER_FPS: ${{ secrets.RENDER_FPS || '30' }}
         run: |
           set -euo pipefail
           DATE_DIR="${{ steps.slot.outputs.date_dir }}"
           mkdir -p "$DATE_DIR/renders"
+          render_args=(--fps "$RENDER_FPS" --workers 1 --max-concurrent-renders 1)
+          case "$RENDER_PRESET" in
+            social-balanced|social-small)
+              render_args+=(--video-bitrate "$RENDER_VIDEO_BITRATE")
+              ;;
+            archive-high)
+              render_args+=(--quality high)
+              ;;
+            *)
+              echo "Unknown RENDER_PRESET: $RENDER_PRESET" >&2
+              exit 1
+              ;;
+          esac
           for dir in "$DATE_DIR"/*/; do
             [ -f "$dir/index.html" ] || continue
             echo "Rendering $dir"
             (cd "$dir" && npx --yes hyperframes@0.6.40 lint && npx --yes hyperframes@0.6.40 validate && npx --yes hyperframes@0.6.40 inspect --samples 12)
-            (cd "$dir" && npx --yes hyperframes@0.6.40 render --output "../renders/$(basename "$dir").mp4" --quality standard --fps 24 --workers 1 --max-concurrent-renders 1 --video-bitrate 10M)
+            (cd "$dir" && npx --yes hyperframes@0.6.40 render --output "../renders/$(basename "$dir").mp4" "${render_args[@]}")
           done
 
       - name: Publish social videos

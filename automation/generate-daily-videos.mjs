@@ -36,6 +36,10 @@ const narrationDurationMin = Number(process.env.NARRATION_DURATION_MIN || 70);
 const narrationDurationMax = Number(process.env.NARRATION_DURATION_MAX || 92);
 const scriptCharMin = Number(process.env.SCRIPT_CHAR_MIN || 1050);
 const scriptCharMax = Number(process.env.SCRIPT_CHAR_MAX || 1320);
+const visualBeatMin = Number(process.env.VISUAL_BEAT_MIN_SECONDS || 3.2);
+const visualBeatMax = Number(process.env.VISUAL_BEAT_MAX_SECONDS || 6.5);
+const visualBeatMinCount = Number(process.env.VISUAL_BEAT_MIN_COUNT || 5);
+const visualBeatMaxCount = Number(process.env.VISUAL_BEAT_MAX_COUNT || 14);
 
 const outRoot = path.join(projectRoot, "daily", date, `slot-${slot}`);
 const imageUserAgent = "Mozilla/5.0 (compatible; sun-tzu-video-bot/1.0; +https://github.com/heygen-com/hyperframes)";
@@ -432,7 +436,114 @@ async function download(url, output) {
   await writeFile(output, bytes);
 }
 
-async function downloadLessonImages(lesson, dir) {
+async function callImagen(prompt, negativePrompt) {
+  const { projectId, location } = requireVertexConfig();
+  const accessToken = vertexAccessToken();
+  const model = process.env.GEMINI_IMAGE_MODEL || process.env.IMAGEN_MODEL || "imagen-4.0-generate-001";
+  const url = new URL(`https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:predict`);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: {
+        sampleCount: 1,
+        aspectRatio: "9:16",
+        negativePrompt,
+        includeRaiReason: true,
+        includeSafetyAttributes: true,
+        outputOptions: { mimeType: "image/png" },
+        personGeneration: process.env.IMAGEN_PERSON_GENERATION || "allow_adult",
+        safetySetting: process.env.IMAGEN_SAFETY_SETTING || "block_only_high",
+      },
+    }),
+  });
+  const bodyText = await res.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    body = { raw: bodyText };
+  }
+  if (!res.ok) {
+    const message = body?.error?.message || bodyText || `HTTP ${res.status}`;
+    throw new Error(`Imagen API request failed: ${message}`);
+  }
+  const prediction = body?.predictions?.find((item) => item?.bytesBase64Encoded);
+  if (!prediction?.bytesBase64Encoded) {
+    const reason = JSON.stringify(body?.predictions?.[0]?.raiFilteredReason || body?.predictions?.[0]?.safetyAttributes || body).slice(0, 320);
+    throw new Error(`Imagen returned no image bytes. ${reason}`);
+  }
+  return {
+    bytes: Buffer.from(prediction.bytesBase64Encoded, "base64"),
+    mimeType: prediction.mimeType || "image/png",
+    enhancedPrompt: prediction.prompt,
+    model,
+  };
+}
+
+function normalizeGeneratedImage(input, output, cwd) {
+  run("ffmpeg", [
+    "-y", "-i", input,
+    "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
+    "-frames:v", "1",
+    "-update", "1",
+    output,
+  ], cwd);
+}
+
+async function generateLessonImages(visualPlan, dir) {
+  const enabled = process.env.ENABLE_GEMINI_IMAGES !== "false" && process.env.ENABLE_GEMINI_IMAGES !== "0";
+  if (!enabled) throw new Error("Gemini image generation disabled by ENABLE_GEMINI_IMAGES.");
+
+  const assetsDir = path.join(dir, "assets", "generated");
+  await mkdir(assetsDir, { recursive: true });
+  const sources = [];
+  for (const [index, beat] of visualPlan.beats.entries()) {
+    const filename = `scene-${String(index + 1).padStart(2, "0")}.png`;
+    const rawPath = path.join(assetsDir, `raw-${filename}`);
+    const outputPath = path.join(assetsDir, filename);
+    const image = await callImagen(beat.prompt, beat.negativePrompt || defaultNegativePrompt());
+    await writeFile(rawPath, image.bytes);
+    normalizeGeneratedImage(rawPath, outputPath, dir);
+    sources.push({
+      file: `assets/generated/${filename}`,
+      provider: "Vertex AI Imagen",
+      model: image.model,
+      prompt: beat.prompt,
+      enhancedPrompt: image.enhancedPrompt,
+      negativePrompt: beat.negativePrompt,
+      start: beat.start,
+      duration: beat.duration,
+      motion: beat.motion,
+      mood: beat.mood,
+      captionRefs: beat.captionRefs,
+    });
+  }
+  return sources;
+}
+
+function applyVisualTimingToSources(sources, visualPlan) {
+  const usable = sources.filter((source) => source?.file);
+  if (!usable.length) return [];
+  return visualPlan.beats.map((beat, index) => ({
+    ...usable[index % usable.length],
+    file: usable[index % usable.length].file,
+    repeatedFrom: index >= usable.length ? usable[index % usable.length].file : usable[index % usable.length].repeatedFrom,
+    start: beat.start,
+    duration: beat.duration,
+    prompt: beat.prompt,
+    negativePrompt: beat.negativePrompt,
+    motion: beat.motion,
+    mood: beat.mood,
+    captionRefs: beat.captionRefs,
+  }));
+}
+
+async function downloadLessonImages(lesson, dir, targetCount = 7) {
   const assetsDir = path.join(dir, "assets", "internet");
   await mkdir(assetsDir, { recursive: true });
   const candidates = [];
@@ -472,7 +583,7 @@ async function downloadLessonImages(lesson, dir) {
     }
   }
 
-  const selected = selectDiverseImageCandidates(candidates, lesson, 7);
+  const selected = selectDiverseImageCandidates(candidates, lesson, targetCount);
 
   if (selected.length < 3) {
     throw new Error(`Not enough historical image candidates for ${lesson.chapter}; found ${selected.length} from ${candidates.length} candidates`);
@@ -480,7 +591,7 @@ async function downloadLessonImages(lesson, dir) {
 
   const sources = [];
   for (const item of selected) {
-    if (sources.length >= 7) break;
+    if (sources.length >= targetCount) break;
     const ext = path.extname(new URL(item.url).pathname).split("?")[0] || ".jpg";
     const filename = `scene-${String(sources.length + 1).padStart(2, "0")}${ext.toLowerCase()}`;
     try {
@@ -507,7 +618,7 @@ async function downloadLessonImages(lesson, dir) {
   }
 
   const downloaded = [...sources];
-  while (sources.length < 7) {
+  while (sources.length < targetCount) {
     const source = downloaded[sources.length % downloaded.length];
     const ext = path.extname(source.file) || ".jpg";
     const filename = `scene-${String(sources.length + 1).padStart(2, "0")}${ext}`;
@@ -515,6 +626,11 @@ async function downloadLessonImages(lesson, dir) {
     sources.push({ ...source, file: `assets/internet/${filename}`, repeatedFrom: source.file });
   }
   return sources;
+}
+
+async function fallbackLessonImages(lesson, dir, targetCount) {
+  const sources = await downloadLessonImages(lesson, dir, targetCount);
+  return sources.slice(0, Math.max(3, Math.min(targetCount, sources.length)));
 }
 
 function fallbackQueriesForLesson(lesson) {
@@ -742,6 +858,41 @@ const geminiCopySchema = {
   required: ["title", "scriptSegments", "captionBase", "captions", "hashtags", "youtubeTags"],
 };
 
+const visualPlanSchema = {
+  type: "object",
+  properties: {
+    style: {
+      type: "string",
+      description: "One concise English sentence describing the shared visual style.",
+    },
+    beats: {
+      type: "array",
+      minItems: 5,
+      maxItems: 14,
+      items: {
+        type: "object",
+        properties: {
+          start: { type: "number" },
+          duration: { type: "number" },
+          prompt: { type: "string" },
+          negativePrompt: { type: "string" },
+          motion: {
+            type: "string",
+            description: "One of: push, pull, drift-left, drift-right, rise, descend, impact.",
+          },
+          mood: { type: "string" },
+          captionRefs: {
+            type: "array",
+            items: { type: "integer" },
+          },
+        },
+        required: ["start", "duration", "prompt", "negativePrompt", "motion", "mood", "captionRefs"],
+      },
+    },
+  },
+  required: ["style", "beats"],
+};
+
 function geminiCopyPrompt(lesson) {
   return [
     "Bạn là một người viết narration video ngắn tiếng Việt, giọng đời thường sắc bén.",
@@ -789,6 +940,51 @@ function geminiCopyPrompt(lesson) {
       sourceCredit: sourceCredit(lesson),
       platforms: supportedPlatforms,
       platformHashtags,
+    }, null, 2),
+  ].join("\n");
+}
+
+function visualPlanPrompt({ lesson, platform, duration, captionTracks }) {
+  return [
+    "You are a cinematic visual director for vertical Vietnamese short videos.",
+    "Create a flexible visual plan from the narration timing. The number of images must follow the content, not a fixed template.",
+    "",
+    "Rules:",
+    `- Produce ${visualBeatMinCount} to ${visualBeatMaxCount} visual beats.`,
+    `- Target ${visualBeatMin.toFixed(1)} to ${visualBeatMax.toFixed(1)} seconds per visual beat when the content allows it.`,
+    "- Merge adjacent captions when they describe the same location/action/idea.",
+    "- Split when the meaning, location, visual metaphor, or emotional action changes.",
+    "- Cover the full duration from 0 to the final timestamp with no gaps.",
+    "- Use exact start/duration seconds derived from the provided caption timings.",
+    "- Include the hook as the first visual beat, even if captions begin later.",
+    "- Prompts must be in English and image-generation ready.",
+    "- Prompts must be specific: subject, setting, action, camera angle, lighting, color, emotional beat.",
+    "- Shared style: ancient Chinese war strategy, cinematic epic realism, vertical 9:16, high contrast, smoky torchlight, ember gold and deep crimson, no text, no logos, no modern objects.",
+    "- Avoid graphic gore. War imagery may be tense and dramatic, but not explicit.",
+    "- negativePrompt must include: text, typography, logo, watermark, modern clothes, modern weapons, guns, tanks, phones, city skyscrapers, gore, extra fingers, deformed hands.",
+    "",
+    "Return JSON only.",
+    "",
+    "Input:",
+    JSON.stringify({
+      platform,
+      duration,
+      lesson: {
+        sourceAuthor: lesson.sourceAuthor,
+        sourceWork: lesson.sourceWork,
+        chapter: lesson.chapter,
+        title: lesson.title,
+        viTitle: lesson.viTitle,
+        hook: lesson.hook,
+        angle: lesson.angle,
+        takeaway: lesson.takeaway,
+      },
+      captions: captionTracks.map((caption, index) => ({
+        index: index + 1,
+        text: caption.text,
+        start: caption.start,
+        duration: caption.duration,
+      })),
     }, null, 2),
   ].join("\n");
 }
@@ -873,6 +1069,182 @@ async function callGeminiForCopy(lesson, attempt) {
     throw new Error(`Gemini API request failed: ${message}`);
   }
   return extractGeminiJson(body);
+}
+
+async function callGeminiForVisualPlan({ lesson, platform, duration, captionTracks }) {
+  const { projectId, location } = requireVertexConfig();
+  const accessToken = vertexAccessToken();
+  const model = process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash";
+  const url = new URL(`https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: visualPlanPrompt({ lesson, platform, duration, captionTracks }) }] }],
+      generationConfig: {
+        temperature: 0.55,
+        responseMimeType: "application/json",
+        responseSchema: visualPlanSchema,
+      },
+    }),
+  });
+  const bodyText = await res.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    body = { raw: bodyText };
+  }
+  if (!res.ok) {
+    const message = body?.error?.message || bodyText || `HTTP ${res.status}`;
+    throw new Error(`Gemini visual plan request failed: ${message}`);
+  }
+  return extractGeminiJson(body);
+}
+
+function defaultNegativePrompt() {
+  return "text, typography, logo, watermark, modern clothes, modern weapons, guns, tanks, phones, city skyscrapers, gore, extra fingers, deformed hands, low resolution, blurry face";
+}
+
+function visualStylePrefix() {
+  return "Ancient Chinese war strategy, cinematic epic realism, vertical 9:16 composition, high contrast, smoky torchlight, ember gold and deep crimson palette, dramatic depth, no text, no logos, no modern objects.";
+}
+
+function fallbackPromptForCaption(text, index, lesson) {
+  const normalized = normalizeForMatch(text);
+  let subject = "an ancient Chinese strategist studying a battlefield map where one weak point glows";
+  if (normalized.includes("phong thu") || normalized.includes("khong phong thu")) subject = "a guarded fortress with an unprotected side gate hidden in smoke";
+  else if (normalized.includes("chu quan") || normalized.includes("khong kip")) subject = "a confident war camp caught unaware as shadows move behind the tents";
+  else if (normalized.includes("tranh cai")) subject = "a noisy ancient court argument while one calm strategist steps away";
+  else if (normalized.includes("canh tranh") || normalized.includes("chen")) subject = "a crowded battlefield road and one quiet empty path opening beside it";
+  else if (normalized.includes("tien") || normalized.includes("toc do")) subject = "heavy gold chests beside a swift messenger horse racing through torchlight";
+  else if (normalized.includes("tieng on") || normalized.includes("chinh xac")) subject = "chaotic drums and banners pierced by one precise arrow aimed at a tiny target";
+  else if (normalized.includes("buc tuong")) subject = "a massive ancient city wall too thick to attack directly";
+  else if (normalized.includes("canh cua")) subject = "a hidden wooden door revealed in the side of an ancient stone wall";
+  else if (normalized.includes("chien luoc") || normalized.includes("mot don")) subject = "all forces converging into one bright decisive strike on a battlefield map";
+  return [
+    visualStylePrefix(),
+    `Scene ${index + 1}: ${subject}.`,
+    `Narration meaning: ${text}`,
+    "Low angle cinematic camera, strong silhouette, volumetric smoke, sharp central focal point, poster-like clarity.",
+  ].join(" ");
+}
+
+function fallbackVisualPlan({ lesson, duration, captionTracks }) {
+  const beats = [];
+  const captions = [{ text: lesson.hook, start: 0, duration: Math.min(3, duration), hook: true }, ...captionTracks];
+  let group = null;
+  const pushGroup = () => {
+    if (!group) return;
+    const end = Math.min(duration, Math.max(...group.items.map((item) => item.start + item.duration)));
+    beats.push({
+      start: group.start,
+      duration: Number(Math.max(0.5, end - group.start).toFixed(2)),
+      prompt: fallbackPromptForCaption(group.items.map((item) => item.text).join(" "), beats.length, lesson),
+      negativePrompt: defaultNegativePrompt(),
+      motion: ["push", "drift-left", "drift-right", "impact"][beats.length % 4],
+      mood: "cinematic strategic tension",
+      captionRefs: group.items.filter((item) => !item.hook).map((item) => captionTracks.indexOf(item) + 1).filter((index) => index > 0),
+    });
+    group = null;
+  };
+
+  for (const item of captions) {
+    const itemEnd = item.start + item.duration;
+    if (!group) {
+      group = { start: item.start, items: [item] };
+      continue;
+    }
+    const groupEnd = Math.max(...group.items.map((entry) => entry.start + entry.duration));
+    const mergedDuration = itemEnd - group.start;
+    const shouldMerge = mergedDuration <= visualBeatMax && beats.length + (captions.length - captions.indexOf(item)) > visualBeatMinCount;
+    if (shouldMerge || groupEnd - group.start < visualBeatMin) {
+      group.items.push(item);
+    } else {
+      pushGroup();
+      group = { start: item.start, items: [item] };
+    }
+  }
+  pushGroup();
+
+  while (beats.length > visualBeatMax) {
+    const last = beats.pop();
+    const previous = beats[beats.length - 1];
+    previous.duration = Number((last.start + last.duration - previous.start).toFixed(2));
+    previous.prompt = `${previous.prompt} Continue the same visual metaphor into: ${last.prompt}`;
+    previous.captionRefs = uniqueList([...previous.captionRefs, ...last.captionRefs]);
+  }
+
+  if (beats[0]) beats[0].start = 0;
+  for (let i = 0; i < beats.length; i += 1) {
+    const nextStart = i === beats.length - 1 ? duration : beats[i + 1].start;
+    beats[i].duration = Number(Math.max(0.5, nextStart - beats[i].start).toFixed(2));
+  }
+  return {
+    style: visualStylePrefix(),
+    beats,
+  };
+}
+
+function normalizeVisualPlan(rawPlan, { lesson, duration, captionTracks }) {
+  const fallback = fallbackVisualPlan({ lesson, duration, captionTracks });
+  const rawBeats = Array.isArray(rawPlan?.beats) ? rawPlan.beats : [];
+  if (rawBeats.length < visualBeatMinCount || rawBeats.length > visualBeatMaxCount) return fallback;
+
+  const sorted = rawBeats
+    .map((beat, index) => ({
+      start: Number(beat.start),
+      duration: Number(beat.duration),
+      prompt: auditHumanCopy(beat.prompt),
+      negativePrompt: auditHumanCopy(beat.negativePrompt) || defaultNegativePrompt(),
+      motion: ["push", "pull", "drift-left", "drift-right", "rise", "descend", "impact"].includes(beat.motion) ? beat.motion : "push",
+      mood: auditHumanCopy(beat.mood) || "cinematic strategic tension",
+      captionRefs: Array.isArray(beat.captionRefs) ? beat.captionRefs.map(Number).filter((value) => Number.isInteger(value) && value >= 1 && value <= captionTracks.length) : [],
+      originalIndex: index,
+    }))
+    .filter((beat) => Number.isFinite(beat.start) && Number.isFinite(beat.duration) && beat.duration > 0 && beat.prompt)
+    .sort((a, b) => a.start - b.start || a.originalIndex - b.originalIndex);
+
+  if (sorted.length < visualBeatMinCount) return fallback;
+
+  const beats = sorted.slice(0, visualBeatMaxCount).map((beat, index, items) => {
+    const start = index === 0 ? 0 : clamp(beat.start, 0, duration);
+    const nextStart = index === items.length - 1 ? duration : clamp(items[index + 1].start, start + 0.5, duration);
+    return {
+      start: Number(start.toFixed(2)),
+      duration: Number(Math.max(0.5, nextStart - start).toFixed(2)),
+      prompt: `${visualStylePrefix()} ${beat.prompt}`,
+      negativePrompt: beat.negativePrompt.includes("text") ? beat.negativePrompt : `${beat.negativePrompt}, ${defaultNegativePrompt()}`,
+      motion: beat.motion,
+      mood: beat.mood,
+      captionRefs: uniqueList(beat.captionRefs),
+    };
+  }).filter((beat) => beat.duration > 0);
+
+  if (!beats.length || Math.abs(beats[0].start) > 0.01) return fallback;
+  const end = beats[beats.length - 1].start + beats[beats.length - 1].duration;
+  if (Math.abs(end - duration) > 0.12) return fallback;
+  return {
+    style: auditHumanCopy(rawPlan?.style) || visualStylePrefix(),
+    beats,
+  };
+}
+
+async function generateVisualPlan({ lesson, platform, duration, captionTracks }) {
+  if (process.env.ENABLE_GEMINI_VISUAL_PLAN === "false" || process.env.ENABLE_GEMINI_VISUAL_PLAN === "0") {
+    return fallbackVisualPlan({ lesson, duration, captionTracks });
+  }
+  try {
+    const raw = await callGeminiForVisualPlan({ lesson, platform, duration, captionTracks });
+    return normalizeVisualPlan(raw, { lesson, duration, captionTracks });
+  } catch (error) {
+    console.warn(`Gemini visual plan skipped: ${error.message}`);
+    return fallbackVisualPlan({ lesson, duration, captionTracks });
+  }
 }
 
 function normalizeHashtag(value) {
@@ -1108,13 +1480,10 @@ function subjectDepthForImage(img, subjectOutlines) {
 }
 
 function renderHtml({ lesson, platform, imageSources, duration, captionTracks, subjectOutlines = new Map() }) {
-  const sceneDur = duration / 7;
   const transitionDur = 0.58;
   const scenes = imageSources.map((img, i) => {
-    const nominalStart = +(i * sceneDur).toFixed(2);
-    const start = i === 0 ? 0 : Math.max(0, +(nominalStart - transitionDur).toFixed(2));
-    const nextStart = i === 6 ? duration : +((i + 1) * sceneDur).toFixed(2);
-    const dur = +(nextStart - start).toFixed(2);
+    const start = Number(img.start ?? (i === 0 ? 0 : imageSources[i - 1].start + imageSources[i - 1].duration));
+    const dur = Number(img.duration ?? Math.max(0.5, duration - start));
     return `<div id="scene-${i + 1}" class="clip scene" style="z-index:${i + 1}" data-start="${start}" data-duration="${dur}" data-track-index="${10 + i}">
         <div class="scene-bg" style="background-image:url('${img.file}')" data-layout-ignore></div>
         <div class="scene-plane" data-layout-allow-overflow>
@@ -1133,9 +1502,8 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
   }).join(",\n        ");
 
   const sceneTweens = imageSources.map((img, i) => {
-    const start = +(i * sceneDur).toFixed(2);
-    const nextStart = +((i + 1) * sceneDur).toFixed(2);
-    const dur = i === 6 ? +(duration - start).toFixed(2) : +(nextStart - start).toFixed(2);
+    const start = Number(img.start ?? 0);
+    const dur = Number(img.duration ?? Math.max(0.5, duration - start));
     const x1 = i % 2 === 0 ? -150 : 190;
     const x2 = i % 2 === 0 ? 150 : -210;
     const y1 = i % 3 === 0 ? 20 : -50;
@@ -1150,7 +1518,7 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
     const subjectX2 = i % 2 === 0 ? subjectDepthPush : -subjectDepthPush;
     const subjectY1 = i % 3 === 0 ? -subjectDepthPush * 0.18 : subjectDepthPush * 0.12;
     const subjectY2 = i % 3 === 0 ? subjectDepthPush * 0.55 : -subjectDepthPush * 0.42;
-    const fadeIn = i === 0 ? `tl.set("#scene-${i + 1}", { opacity: 1, filter: "blur(0px)" }, 0);` : `tl.fromTo("#scene-${i + 1}", { opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)", duration: ${transitionDur}, ease: "power2.out" }, ${Math.max(0, +(start - transitionDur * 0.72).toFixed(2))});`;
+    const fadeIn = i === 0 ? `tl.set("#scene-${i + 1}", { opacity: 1, filter: "blur(0px)" }, 0);` : `tl.fromTo("#scene-${i + 1}", { opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)", duration: ${Math.min(transitionDur, dur * 0.35).toFixed(2)}, ease: "power2.out" }, ${Math.max(0, +(start - transitionDur * 0.72).toFixed(2))});`;
     const outline = subjectOutlines.get(img.file);
     const subjectMotion = outline?.hasSubjectLayer ? `
       tl.fromTo("#scene-${i + 1} .subject-depth", { scale: 1.012, x: ${subjectX1.toFixed(2)}, y: ${subjectY1.toFixed(2)} }, { scale: 1.055, x: ${subjectX2.toFixed(2)}, y: ${subjectY2.toFixed(2)}, duration: ${dur}, ease: "sine.inOut" }, ${start});
@@ -1166,15 +1534,15 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
   }).join("\n      ");
 
   const transitionFlashes = imageSources.slice(1).map((_, i) => {
-    const start = +(((i + 1) * sceneDur) - transitionDur * 0.54).toFixed(2);
-    return `tl.fromTo("#transition-flash", { opacity: 0 }, { opacity: 0.32, duration: 0.14, ease: "power1.out", yoyo: true, repeat: 1 }, ${start});`;
+    const start = +(Number(imageSources[i + 1].start ?? 0) - transitionDur * 0.54).toFixed(2);
+    return `tl.fromTo("#transition-flash", { opacity: 0 }, { opacity: 0.32, duration: 0.14, ease: "power1.out", yoyo: true, repeat: 1, overwrite: "auto" }, ${start});`;
   }).join("\n      ");
 
   const outlineTweens = imageSources.map((img, i) => {
     const outline = subjectOutlines.get(img.file);
     if (!outline?.paths?.length) return "";
-    const start = +(i * sceneDur + 0.42).toFixed(2);
-    const sceneEnd = i === 6 ? duration : (i + 1) * sceneDur;
+    const start = +(Number(img.start ?? 0) + 0.42).toFixed(2);
+    const sceneEnd = Math.min(duration, Number(img.start ?? 0) + Number(img.duration ?? 0));
     const drawDuration = Math.min(0.92, Math.max(0.28, sceneEnd - start - 0.78));
     const dimStart = +(Math.min(start + drawDuration + 0.24, sceneEnd - 0.72)).toFixed(2);
     const fadeAt = +(Math.max(dimStart + 0.42, Math.min(duration - 0.6, sceneEnd - 0.44))).toFixed(2);
@@ -1187,7 +1555,11 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
   const captionPulseOpacity = Math.min(1, subjectLayerOpacity + 0.07).toFixed(2);
   const captionPulseTweens = captions.map((caption, i) => {
     const start = +(caption.start + 0.07).toFixed(2);
-    const sceneIndex = Math.min(6, Math.floor(start / sceneDur));
+    const sceneIndex = Math.max(0, imageSources.findIndex((img, index) => {
+      const sceneStart = Number(img.start ?? 0);
+      const sceneEnd = sceneStart + Number(img.duration ?? 0);
+      return start >= sceneStart && (start < sceneEnd || index === imageSources.length - 1);
+    }));
     const outline = subjectOutlines.get(imageSources[sceneIndex]?.file);
     if (!outline?.hasSubjectLayer) return "";
     return `tl.fromTo("#scene-${sceneIndex + 1} .subject-cutout", { opacity: ${subjectLayerOpacity} }, { opacity: ${captionPulseOpacity}, duration: 0.16, ease: "power2.out", yoyo: true, repeat: 1 }, ${start});`;
@@ -1207,7 +1579,7 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
       .scene { opacity: 0; filter: blur(0px); transform-origin: center; will-change: opacity, filter, transform; }
       #scene-1 { opacity: 1; }
       .scene-bg, .scene-plane { position: absolute; inset: -108px; width: calc(100% + 216px); height: calc(100% + 216px); transform-origin: center; will-change: transform; }
-      .scene-bg { inset: -180px; width: calc(100% + 360px); height: calc(100% + 360px); background-size: cover; background-position: center; filter: blur(28px) contrast(1.22) saturate(1.45) sepia(0.32) brightness(0.86); opacity: 0.8; }
+      .scene-bg { inset: -180px; width: calc(100% + 360px); height: calc(100% + 360px); background-size: cover; background-position: center; filter: blur(18px) contrast(1.16) saturate(1.34) sepia(0.28) brightness(0.86); opacity: 0.64; }
       .scene-plane { overflow: visible; }
       .scene-main, .subject-depth, .subject-shadow, .subject-cutout, .subject-outline, .subject-rim { position: absolute; inset: 0; width: 100%; height: 100%; }
       .scene-main { object-fit: cover; }
@@ -1220,7 +1592,7 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
       .subject-outline { z-index: 9; opacity: 0; overflow: visible; pointer-events: none; }
       .subject-path { opacity: 0.8; fill: none; stroke: rgba(255, 239, 168, 0.9); stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; stroke-dashoffset: var(--outline-offset); vector-effect: non-scaling-stroke; mix-blend-mode: screen; filter: drop-shadow(0 0 8px rgba(255, 210, 88, 0.78)) drop-shadow(0 0 18px rgba(255, 72, 35, 0.52)); }
       .scene::before { content: ""; position: absolute; z-index: 2; inset: 0; background: radial-gradient(circle at 28% 16%, rgba(255, 224, 68, 0.45), transparent 28%), radial-gradient(circle at 82% 72%, rgba(221, 23, 17, 0.48), transparent 40%), linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.18) 44%, rgba(0,0,0,0.74) 100%); mix-blend-mode: overlay; pointer-events: none; }
-      .scene::after { content: ""; position: absolute; z-index: 3; inset: 0; background: radial-gradient(ellipse at center, transparent 34%, rgba(0,0,0,0.76) 100%), repeating-linear-gradient(0deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 5px); opacity: 0.82; pointer-events: none; }
+      .scene::after { content: ""; position: absolute; z-index: 3; inset: 0; background: radial-gradient(ellipse at center, transparent 34%, rgba(0,0,0,0.74) 100%), repeating-linear-gradient(0deg, rgba(255,255,255,0.022) 0 1px, transparent 1px 7px); opacity: 0.64; pointer-events: none; }
       .scene-light { position: absolute; z-index: 4; top: -18%; bottom: -18%; left: -32%; width: 44%; transform: skewX(-18deg); background: linear-gradient(90deg, transparent 0%, rgba(255, 224, 147, 0.32) 46%, transparent 100%); mix-blend-mode: soft-light; opacity: 0.1; pointer-events: none; will-change: transform, opacity; }
       .scene-vignette-pulse { position: absolute; z-index: 5; inset: 0; opacity: 0; background: radial-gradient(circle at 50% 37%, rgba(255, 223, 137, 0.28), transparent 24%), radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.72) 100%); mix-blend-mode: soft-light; pointer-events: none; }
       .hook { --hook-alpha: 1; --hook-y: 0px; --hook-blur: 0px; position: absolute; z-index: 22; top: auto; left: 50px; right: 50px; bottom: 156px; height: 386px; padding-top: 18px; color: #fff8e7; font-size: 86px; font-weight: 950; line-height: 0.96; text-align: center; text-transform: uppercase; text-shadow: 0 4px 0 rgba(142, 12, 26, 0.96), 0 22px 50px rgba(0,0,0,0.78); filter: none; }
@@ -1228,8 +1600,8 @@ function renderHtml({ lesson, platform, imageSources, duration, captionTracks, s
       .hook em { color: #ffdd57; font-style: normal; }
       .subtitle { position: absolute; z-index: 20; top: 50%; left: 0; right: 0; bottom: auto; height: 360px; transform: translateY(-50%); overflow: visible; display: flex; justify-content: center; align-items: center; pointer-events: none; }
       .subtitle span { position: absolute; left: 44px; right: 44px; top: 50%; bottom: auto; display: block; max-width: 992px; margin: 0 auto; padding: 22px 30px 25px; border: 4px solid rgba(224, 57, 137, 0.78); border-radius: 9px; background: rgba(24, 8, 28, 0.9); color: #fff5ff; font-size: 48px; font-weight: 950; line-height: 1.06; text-align: center; text-shadow: 0 2px 0 rgba(255, 71, 159, 0.65), 0 5px 14px rgba(0,0,0,0.88); box-shadow: 0 0 0 2px rgba(255,255,255,0.08), 0 20px 52px rgba(0,0,0,0.56); }
-      .grain { position: absolute; z-index: 10; inset: 0; opacity: 0.14; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 3px), repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 6px); mix-blend-mode: soft-light; pointer-events: none; }
-      .dust-veil { position: absolute; z-index: 9; inset: -12%; opacity: 0.2; background: radial-gradient(circle at 18% 24%, rgba(255,255,255,0.18), transparent 18%), radial-gradient(circle at 70% 42%, rgba(255,210,120,0.12), transparent 22%), radial-gradient(circle at 42% 78%, rgba(255,255,255,0.1), transparent 20%); filter: blur(18px); mix-blend-mode: screen; pointer-events: none; will-change: transform, opacity; }
+      .grain { position: absolute; z-index: 10; inset: 0; opacity: 0.07; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 4px), repeating-linear-gradient(90deg, rgba(0,0,0,0.1) 0 1px, transparent 1px 8px); mix-blend-mode: soft-light; pointer-events: none; }
+      .dust-veil { position: absolute; z-index: 9; inset: -12%; opacity: 0.12; background: radial-gradient(circle at 18% 24%, rgba(255,255,255,0.12), transparent 18%), radial-gradient(circle at 70% 42%, rgba(255,210,120,0.08), transparent 22%), radial-gradient(circle at 42% 78%, rgba(255,255,255,0.06), transparent 20%); filter: blur(12px); mix-blend-mode: screen; pointer-events: none; will-change: transform, opacity; }
       .transition-flash { position: absolute; z-index: 11; inset: 0; opacity: 0; background: radial-gradient(circle at 35% 28%, rgba(255, 224, 115, 0.6), transparent 34%), linear-gradient(115deg, transparent 0%, rgba(255, 68, 34, 0.22) 48%, transparent 74%); mix-blend-mode: screen; pointer-events: none; }
     </style>
   </head>
@@ -1460,17 +1832,21 @@ function captionTracksFromTranscript(segments, transcriptWords, duration) {
   });
 }
 
-async function generateSubjectOutlines(dir) {
+async function generateSubjectOutlines(dir, imageSources = []) {
   const enabled = process.env.ENABLE_SUBJECT_OUTLINE !== "false" && process.env.ENABLE_SUBJECT_OUTLINE !== "0";
   const output = path.join(dir, "assets", "masks", "subject-outlines.json");
   if (!enabled) return new Map();
+  const firstFile = imageSources.find((source) => source?.file)?.file || "assets/internet/scene-01.jpg";
+  const assetPrefix = path.dirname(firstFile).replace(/\\/g, "/");
+  const imagesDir = path.join(dir, assetPrefix);
 
   const python = process.env.SUBJECT_PYTHON_BIN || process.env.PYTHON_BIN || "python3";
   const script = path.join(projectRoot, "automation", "generate-subject-outlines.py");
   const args = [
     script,
-    "--images-dir", path.join(dir, "assets", "internet"),
+    "--images-dir", imagesDir,
     "--output", output,
+    "--asset-prefix", assetPrefix,
     "--model", process.env.SUBJECT_MODEL || "isnet-general-use",
     "--min-area-ratio", process.env.SUBJECT_MIN_AREA_RATIO || "0.015",
     "--max-contours", process.env.SUBJECT_MAX_CONTOURS || "3",
@@ -1518,12 +1894,9 @@ async function prepareProject(lesson, platform) {
   const narration = narrationBundle(copyPack.scriptSegments);
   const text = narration.text;
   await mkdir(path.join(dir, "assets"), { recursive: true });
-  const imageSources = await downloadLessonImages(lesson, dir);
-  const subjectOutlines = await generateSubjectOutlines(dir);
   await writeFile(path.join(dir, "script.txt"), text, "utf8");
   await writeFile(path.join(dir, "subtitle-segments.json"), JSON.stringify(narration.segments, null, 2), "utf8");
   await writeFile(path.join(dir, "generated-copy.json"), JSON.stringify(copyPack, null, 2), "utf8");
-  await writeFile(path.join(dir, "image-sources.json"), JSON.stringify(imageSources, null, 2), "utf8");
   await writeFile(path.join(dir, "hyperframes.json"), JSON.stringify({
     $schema: "https://hyperframes.heygen.com/schema/hyperframes.json",
     registry: "https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry",
@@ -1561,6 +1934,20 @@ async function prepareProject(lesson, platform) {
     captionTracks = fallbackCaptionTracks(narration.segments, duration);
   }
   await writeFile(path.join(dir, "caption-tracks.json"), JSON.stringify(captionTracks, null, 2), "utf8");
+
+  const visualPlan = await generateVisualPlan({ lesson, platform, duration, captionTracks });
+  await writeFile(path.join(dir, "visual-plan.json"), JSON.stringify(visualPlan, null, 2), "utf8");
+
+  let imageSources;
+  try {
+    imageSources = await generateLessonImages(visualPlan, dir);
+  } catch (error) {
+    console.warn(`Generated images skipped; falling back to historical image search: ${error.message}`);
+    const fallbackSources = await fallbackLessonImages(lesson, dir, visualPlan.beats.length);
+    imageSources = applyVisualTimingToSources(fallbackSources, visualPlan);
+  }
+  const subjectOutlines = await generateSubjectOutlines(dir, imageSources);
+  await writeFile(path.join(dir, "image-sources.json"), JSON.stringify(imageSources, null, 2), "utf8");
 
   const musicSource = path.join(projectRoot, "assets", "background_music.mp3");
   if (!existsSync(musicSource)) throw new Error("Missing assets/background_music.mp3");

@@ -7,8 +7,8 @@ This folder powers the GitHub Actions workflow at `.github/workflows/daily-sun-t
 - Runs every 3 hours at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, and 21:00 Asia/Ho_Chi_Minh.
 - Each run selects 1 lesson for that slot, generates 1 vertical 9:16 video, uploads a TikTok draft, then publishes the same MP4 to YouTube Shorts and Facebook Reels.
 - The content pool is sequential and skips any lesson marked with `disabled: true`, which keeps already-used lessons archived without selecting them again. The current active pool has 240 lessons, so at 8 scheduled runs per day the sequence repeats after 240 videos, or 30 days. Set `VIDEO_SERIES_START_DATE` if you want to reset where the sequence begins.
-- Searches Wikimedia Commons and Openverse for lesson-specific historical/classical images, then filters out modern photos or contemporary military/sports imagery before downloading fresh assets for each generated video.
-- The image filter favors Chinese historical/classical subjects such as Sun Tzu, Confucius, Laozi, dynasty paintings, scrolls, old maps, artifacts, temples, and museum images. Set `IMAGE_HISTORICAL_SCORE` higher if you want stricter filtering.
+- Uses Gemini to create a flexible `visual-plan.json` from the actual narration/caption timing, then generates one image per visual beat with Vertex AI Imagen into `assets/generated/`.
+- If generated images are disabled or unavailable, falls back to Wikimedia Commons and Openverse historical/classical image search. Set `IMAGE_HISTORICAL_SCORE` higher if you want stricter fallback filtering.
 - Optionally runs local ML subject separation with `rembg`, exports subject/shadow PNG layers, extracts SVG contours, and animates a 2.5D living-scene subject hit. If the model or dependencies are unavailable, the video generation continues without the subject effect.
 - Generates Vietnamese VieNeu narration, processes it for a louder heroic social-video mix, adds background music, and writes HyperFrames compositions.
 - Writes platform-specific viral captions and tags into `post.json`; YouTube Shorts and Facebook Reels use the caption tuned for that platform, while TikTok captions remain available for manual posting from the draft.
@@ -27,8 +27,14 @@ Then render one generated project:
 ```bash
 cd daily/2026-05-25/slot-1/video-laying-plans
 npx --yes hyperframes@0.6.40 lint
-npx --yes hyperframes@0.6.40 render --output ../renders/video-laying-plans.mp4 --quality high --fps 30
+npx --yes hyperframes@0.6.40 render --output ../renders/video-laying-plans.mp4 --video-bitrate 5M --fps 30
 ```
+
+Render presets:
+
+- `social-balanced`: 1080x1920, 30fps, `5M` video bitrate. Default for daily uploads.
+- `social-small`: 1080x1920, 30fps, `4M` video bitrate for lighter files.
+- `archive-high`: HyperFrames high quality for master renders only.
 
 Set `SKIP_TTS=1` for a structural dry run that creates silent narration.
 

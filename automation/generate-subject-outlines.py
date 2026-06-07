@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 
-def empty_result(image_path: Path) -> dict:
+def empty_result(image_path: Path, asset_prefix: str) -> dict:
     return {
-        "file": f"assets/internet/{image_path.name}",
+        "file": f"{asset_prefix}/{image_path.name}",
         "width": 0,
         "height": 0,
         "paths": [],
@@ -30,6 +30,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate subject outline SVG paths from image files.")
     parser.add_argument("--images-dir", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--asset-prefix", default="assets/internet")
     parser.add_argument("--model", default="isnet-general-use")
     parser.add_argument("--min-area-ratio", type=float, default=0.015)
     parser.add_argument("--max-contours", type=int, default=3)
@@ -54,7 +55,7 @@ def main() -> int:
         output.write_text(json.dumps({
             "enabled": False,
             "error": str(exc),
-            "images": [empty_result(path) for path in image_paths],
+            "images": [empty_result(path, args.asset_prefix) for path in image_paths],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0
 
@@ -65,7 +66,7 @@ def main() -> int:
         output.write_text(json.dumps({
             "enabled": False,
             "error": str(exc),
-            "images": [empty_result(path) for path in image_paths],
+            "images": [empty_result(path, args.asset_prefix) for path in image_paths],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0
 
@@ -122,7 +123,7 @@ def main() -> int:
                 shadow.save(output.parent / f"{image_path.stem}-shadow.png")
 
             results.append({
-                "file": f"assets/internet/{image_path.name}",
+                "file": f"{args.asset_prefix}/{image_path.name}",
                 "width": width,
                 "height": height,
                 "paths": paths,
@@ -133,7 +134,7 @@ def main() -> int:
             })
         except Exception as exc:
             print(f"Skipping subject outline for {image_path.name}: {exc}", file=sys.stderr)
-            result = empty_result(image_path)
+            result = empty_result(image_path, args.asset_prefix)
             result["error"] = str(exc)
             results.append(result)
 
