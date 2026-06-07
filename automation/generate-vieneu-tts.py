@@ -6,6 +6,16 @@ from pathlib import Path
 from vieneu import Vieneu
 
 
+def check_runtime_dependencies() -> None:
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError as error:
+        raise SystemExit(
+            "Missing Python package `llama_cpp`. Install it with "
+            "`python -m pip install \"llama-cpp-python>=0.3.16\"`."
+        ) from error
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate heroic Vietnamese VieNeu narration.")
     parser.add_argument("--text-file", required=True)
@@ -22,6 +32,7 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    check_runtime_dependencies()
     tts = Vieneu(mode=args.mode, emotion=args.emotion)
     try:
         voice = tts.get_preset_voice(args.voice)

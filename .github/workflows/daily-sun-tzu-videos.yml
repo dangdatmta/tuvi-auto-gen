@@ -96,7 +96,7 @@ jobs:
       - name: Install FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg build-essential cmake ninja-build
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -106,7 +106,7 @@ jobs:
       - name: Install Python video packages
         run: |
           python -m pip install --upgrade pip
-          python -m pip install vieneu rembg pillow opencv-python-headless numpy
+          python -m pip install "llama-cpp-python>=0.3.16" vieneu rembg pillow opencv-python-headless numpy
 
       - name: Authenticate to Google Cloud
         id: google-auth
