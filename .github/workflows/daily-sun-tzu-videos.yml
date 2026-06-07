@@ -142,26 +142,38 @@ jobs:
           FFMPEG_ENCODE_TIMEOUT_MS: "1200000"
           FFMPEG_PROCESS_TIMEOUT_MS: "1200000"
           FFMPEG_STREAMING_TIMEOUT_MS: "1200000"
-          RENDER_PRESET: ${{ secrets.RENDER_PRESET || 'social-balanced' }}
-          RENDER_VIDEO_BITRATE: ${{ secrets.RENDER_VIDEO_BITRATE || '5M' }}
-          RENDER_FPS: ${{ secrets.RENDER_FPS || '30' }}
+          RENDER_PRESET: ${{ secrets.RENDER_PRESET }}
+          RENDER_VIDEO_BITRATE: ${{ secrets.RENDER_VIDEO_BITRATE }}
+          RENDER_FPS: ${{ secrets.RENDER_FPS }}
         run: |
           set -euo pipefail
           DATE_DIR="${{ steps.slot.outputs.date_dir }}"
           mkdir -p "$DATE_DIR/renders"
+
+          RENDER_PRESET="${RENDER_PRESET:-social-balanced}"
+          RENDER_FPS="${RENDER_FPS:-30}"
+          RENDER_VIDEO_BITRATE="${RENDER_VIDEO_BITRATE:-}"
+
           render_args=(--fps "$RENDER_FPS" --workers 1 --max-concurrent-renders 1)
           case "$RENDER_PRESET" in
-            social-balanced|social-small)
-              render_args+=(--video-bitrate "$RENDER_VIDEO_BITRATE")
+            social-balanced)
+              render_args+=(--video-bitrate "${RENDER_VIDEO_BITRATE:-5M}")
+              ;;
+            social-small)
+              render_args+=(--video-bitrate "${RENDER_VIDEO_BITRATE:-4M}")
               ;;
             archive-high)
               render_args+=(--quality high)
               ;;
             *)
-              echo "Unknown RENDER_PRESET: $RENDER_PRESET" >&2
-              exit 1
+              echo "Unknown RENDER_PRESET: $RENDER_PRESET; falling back to social-balanced." >&2
+              RENDER_PRESET="social-balanced"
+              render_args+=(--video-bitrate "${RENDER_VIDEO_BITRATE:-5M}")
               ;;
           esac
+          echo "Render preset: $RENDER_PRESET"
+          echo "Render args: ${render_args[*]}"
+
           for dir in "$DATE_DIR"/*/; do
             [ -f "$dir/index.html" ] || continue
             echo "Rendering $dir"
