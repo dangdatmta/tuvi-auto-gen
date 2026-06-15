@@ -47,6 +47,7 @@ assets/narration*.wav
 assets/*_heroic.wav
 assets/background_music_*.mp3
 assets/background_music_*.wav
+assets/generated-cache/
 
 # Logs
 *.log

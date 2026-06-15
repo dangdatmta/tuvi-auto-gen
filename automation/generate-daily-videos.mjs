@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, copyFile, readdir } from "node:fs/promises"
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const projectRoot = process.cwd();
 const envPath = path.join(projectRoot, ".env");
@@ -40,6 +41,11 @@ const visualBeatMin = Number(process.env.VISUAL_BEAT_MIN_SECONDS || 3.2);
 const visualBeatMax = Number(process.env.VISUAL_BEAT_MAX_SECONDS || 6.5);
 const visualBeatMinCount = Number(process.env.VISUAL_BEAT_MIN_COUNT || 5);
 const visualBeatMaxCount = Number(process.env.VISUAL_BEAT_MAX_COUNT || 14);
+const maxNewGeminiImagesPerVideo = nonNegativeInteger(process.env.MAX_NEW_GEMINI_IMAGES_PER_VIDEO, 2);
+const imageReusePools = (process.env.IMAGE_REUSE_POOL || "daily,assets")
+  .split(",")
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean);
 
 const outRoot = path.join(projectRoot, "daily", date, `slot-${slot}`);
 const imageUserAgent = "Mozilla/5.0 (compatible; sun-tzu-video-bot/1.0; +https://github.com/heygen-com/hyperframes)";
@@ -157,6 +163,13 @@ function normalizeSlot(value) {
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function nonNegativeInteger(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.floor(number));
 }
 
 function slugify(text) {
@@ -436,10 +449,14 @@ async function download(url, output) {
   await writeFile(output, bytes);
 }
 
+function imagenModelName() {
+  return process.env.GEMINI_IMAGE_MODEL || process.env.IMAGEN_MODEL || "imagen-4.0-generate-001";
+}
+
 async function callImagen(prompt, negativePrompt) {
   const { projectId, location } = requireVertexConfig();
   const accessToken = vertexAccessToken();
-  const model = process.env.GEMINI_IMAGE_MODEL || process.env.IMAGEN_MODEL || "imagen-4.0-generate-001";
+  const model = imagenModelName();
   const url = new URL(`https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:predict`);
   const res = await fetch(url, {
     method: "POST",
@@ -495,33 +512,237 @@ function normalizeGeneratedImage(input, output, cwd) {
   ], cwd);
 }
 
-async function generateLessonImages(visualPlan, dir) {
-  const enabled = process.env.ENABLE_GEMINI_IMAGES !== "false" && process.env.ENABLE_GEMINI_IMAGES !== "0";
-  if (!enabled) throw new Error("Gemini image generation disabled by ENABLE_GEMINI_IMAGES.");
+function imageFileExtension(file, fallback = ".jpg") {
+  const ext = path.extname(String(file || "").split("?")[0]).toLowerCase();
+  return [".jpg", ".jpeg", ".png", ".webp"].includes(ext) ? ext : fallback;
+}
 
-  const assetsDir = path.join(dir, "assets", "generated");
+function relativeAssetPath(fromDir, absolutePath) {
+  return path.relative(fromDir, absolutePath).split(path.sep).join("/");
+}
+
+function imagenCacheKey(prompt, negativePrompt) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      model: imagenModelName(),
+      prompt,
+      negativePrompt,
+      aspectRatio: "9:16",
+    }))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+async function copyReusableImage(source, beat, index, dir) {
+  const assetsDir = path.join(dir, "assets", "reused");
   await mkdir(assetsDir, { recursive: true });
+  const ext = imageFileExtension(source.absolutePath || source.file);
+  const filename = `scene-${String(index + 1).padStart(2, "0")}${ext}`;
+  const outputPath = path.join(assetsDir, filename);
+  await copyFile(source.absolutePath, outputPath);
+  return {
+    ...source.metadata,
+    file: `assets/reused/${filename}`,
+    provider: source.metadata?.provider || source.provider || "Reused image",
+    reusedFrom: relativeAssetPath(projectRoot, source.absolutePath),
+    isNewGeminiImage: false,
+    prompt: beat.prompt,
+    negativePrompt: beat.negativePrompt,
+    start: beat.start,
+    duration: beat.duration,
+    motion: beat.motion,
+    mood: beat.mood,
+    captionRefs: beat.captionRefs,
+  };
+}
+
+async function collectReusableImages(currentDir) {
   const sources = [];
-  for (const [index, beat] of visualPlan.beats.entries()) {
-    const filename = `scene-${String(index + 1).padStart(2, "0")}.png`;
-    const rawPath = path.join(assetsDir, `raw-${filename}`);
-    const outputPath = path.join(assetsDir, filename);
-    const image = await callImagen(beat.prompt, beat.negativePrompt || defaultNegativePrompt());
-    await writeFile(rawPath, image.bytes);
-    normalizeGeneratedImage(rawPath, outputPath, dir);
+  const seen = new Set();
+  const includeDaily = imageReusePools.includes("daily");
+  const includeAssets = imageReusePools.includes("assets");
+  const currentRoot = path.resolve(currentDir);
+
+  const addImage = (absolutePath, metadata = {}) => {
+    const resolved = path.resolve(absolutePath);
+    if (!existsSync(resolved)) return;
+    if (!/\.(jpe?g|png|webp)$/i.test(resolved)) return;
+    if (path.basename(resolved).startsWith("raw-scene-")) return;
+    if (resolved.startsWith(`${currentRoot}${path.sep}`)) return;
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
     sources.push({
+      absolutePath: resolved,
+      provider: metadata.provider,
+      metadata,
+    });
+  };
+
+  async function visitDaily(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visitDaily(fullPath);
+        continue;
+      }
+      if (entry.name === "image-sources.json") {
+        try {
+          const items = JSON.parse(await readFile(fullPath, "utf8"));
+          for (const item of items || []) {
+            if (!item?.file) continue;
+            addImage(path.resolve(path.dirname(fullPath), item.file), item);
+          }
+        } catch (error) {
+          console.warn(`Ignoring reusable image history ${fullPath}: ${error.message}`);
+        }
+      } else if (/^scene-\d+\.(jpe?g|png|webp)$/i.test(entry.name) && /\/assets\/(?:generated|internet)\//.test(fullPath.split(path.sep).join("/"))) {
+        addImage(fullPath, { provider: "Reused local image" });
+      }
+    }
+  }
+
+  async function visitAssets(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visitAssets(fullPath);
+      } else if (entry.isFile()) {
+        addImage(fullPath, { provider: "Project asset" });
+      }
+    }
+  }
+
+  if (includeDaily) await visitDaily(path.join(projectRoot, "daily"));
+  if (includeAssets) await visitAssets(path.join(projectRoot, "assets", "internet"));
+  return sources.sort((a, b) => a.absolutePath.localeCompare(b.absolutePath));
+}
+
+function chooseNewImageBeatIndexes(beats, maxNewImages) {
+  if (maxNewImages <= 0 || !beats.length) return new Set();
+  const indexes = new Set([0]);
+  if (maxNewImages >= 2 && beats.length > 1) {
+    const halfway = Math.max(1, beats.findIndex((beat) => beat.start >= beats[beats.length - 1].start / 2));
+    let bestIndex = halfway;
+    for (let index = halfway; index < beats.length; index += 1) {
+      if (Number(beats[index].duration || 0) > Number(beats[bestIndex].duration || 0)) bestIndex = index;
+    }
+    indexes.add(bestIndex);
+  }
+  for (let index = 1; indexes.size < Math.min(maxNewImages, beats.length) && index < beats.length; index += 1) {
+    indexes.add(index);
+  }
+  return indexes;
+}
+
+async function generateOrReuseImagen(beat, index, dir) {
+  const assetsDir = path.join(dir, "assets", "generated");
+  const cacheDir = path.join(projectRoot, "assets", "generated-cache");
+  await mkdir(assetsDir, { recursive: true });
+  await mkdir(cacheDir, { recursive: true });
+
+  const negativePrompt = beat.negativePrompt || defaultNegativePrompt();
+  const filename = `scene-${String(index + 1).padStart(2, "0")}.png`;
+  const rawPath = path.join(assetsDir, `raw-${filename}`);
+  const outputPath = path.join(assetsDir, filename);
+  const cacheKey = imagenCacheKey(beat.prompt, negativePrompt);
+  const cachedRawPath = path.join(cacheDir, `${cacheKey}-raw.png`);
+  const cachedOutputPath = path.join(cacheDir, `${cacheKey}.png`);
+
+  if (existsSync(cachedOutputPath)) {
+    await copyFile(cachedOutputPath, outputPath);
+    if (existsSync(cachedRawPath)) await copyFile(cachedRawPath, rawPath);
+    return {
       file: `assets/generated/${filename}`,
       provider: "Vertex AI Imagen",
-      model: image.model,
+      model: imagenModelName(),
       prompt: beat.prompt,
-      enhancedPrompt: image.enhancedPrompt,
-      negativePrompt: beat.negativePrompt,
+      negativePrompt,
+      reusedFrom: relativeAssetPath(projectRoot, cachedOutputPath),
+      isNewGeminiImage: true,
+      imageCacheHit: true,
       start: beat.start,
       duration: beat.duration,
       motion: beat.motion,
       mood: beat.mood,
       captionRefs: beat.captionRefs,
-    });
+    };
+  }
+
+  const image = await callImagen(beat.prompt, negativePrompt);
+  await writeFile(rawPath, image.bytes);
+  await copyFile(rawPath, cachedRawPath);
+  normalizeGeneratedImage(rawPath, outputPath, dir);
+  await copyFile(outputPath, cachedOutputPath);
+  return {
+    file: `assets/generated/${filename}`,
+    provider: "Vertex AI Imagen",
+    model: image.model,
+    prompt: beat.prompt,
+    enhancedPrompt: image.enhancedPrompt,
+    negativePrompt,
+    reusedFrom: null,
+    isNewGeminiImage: true,
+    imageCacheHit: false,
+    start: beat.start,
+    duration: beat.duration,
+    motion: beat.motion,
+    mood: beat.mood,
+    captionRefs: beat.captionRefs,
+  };
+}
+
+function pickReusableImage(pool, lesson, beat, index) {
+  if (!pool.length) return null;
+  const seed = [
+    lesson.title,
+    index,
+    (beat.captionRefs || []).join(","),
+    beat.prompt,
+  ].join("|");
+  return pool[hashDate(seed) % pool.length];
+}
+
+async function ensureReusablePool(lesson, visualPlan, dir) {
+  const pool = await collectReusableImages(dir);
+  if (pool.length) return pool;
+  console.warn("No reusable local images found; downloading historical fallback images.");
+  const fallbackSources = await fallbackLessonImages(lesson, dir, visualPlan.beats.length);
+  return fallbackSources.map((source) => ({
+    absolutePath: path.resolve(dir, source.file),
+    provider: source.provider,
+    metadata: source,
+  })).filter((source) => existsSync(source.absolutePath));
+}
+
+async function generateLessonImages(lesson, visualPlan, dir) {
+  const enabled = process.env.ENABLE_GEMINI_IMAGES !== "false" && process.env.ENABLE_GEMINI_IMAGES !== "0";
+  const newImageBudget = enabled ? Math.min(maxNewGeminiImagesPerVideo, visualPlan.beats.length) : 0;
+  const newImageIndexes = chooseNewImageBeatIndexes(visualPlan.beats, newImageBudget);
+  const reusedCount = visualPlan.beats.length - newImageIndexes.size;
+  console.log(`Gemini image budget: ${newImageIndexes.size} new image(s), ${reusedCount} reused`);
+
+  const reusablePool = reusedCount > 0 ? await ensureReusablePool(lesson, visualPlan, dir) : [];
+  const sources = [];
+  for (const [index, beat] of visualPlan.beats.entries()) {
+    if (newImageIndexes.has(index)) {
+      sources.push(await generateOrReuseImagen(beat, index, dir));
+      continue;
+    }
+    const reusable = pickReusableImage(reusablePool, lesson, beat, index);
+    if (!reusable) throw new Error("No reusable images available for non-Imagen beats.");
+    sources.push(await copyReusableImage(reusable, beat, index, dir));
   }
   return sources;
 }
@@ -1940,7 +2161,7 @@ async function prepareProject(lesson, platform) {
 
   let imageSources;
   try {
-    imageSources = await generateLessonImages(visualPlan, dir);
+    imageSources = await generateLessonImages(lesson, visualPlan, dir);
   } catch (error) {
     console.warn(`Generated images skipped; falling back to historical image search: ${error.message}`);
     const fallbackSources = await fallbackLessonImages(lesson, dir, visualPlan.beats.length);
