@@ -181,7 +181,7 @@ async function publishTikTok(job, post) {
   const accessToken = await getTikTokAccessToken();
   const video = await readFile(job.videoPath);
   const uploadPlan = tiktokUploadPlan(video.byteLength);
-  const init = await jsonFetch("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
+  const init = await jsonFetch("https://open.tiktokapis.com/v2/post/publish/video/init/", {
     method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
