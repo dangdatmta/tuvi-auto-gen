@@ -5,13 +5,13 @@ This folder powers the GitHub Actions workflow at `.github/workflows/daily-sun-t
 ## What It Does
 
 - Runs every 3 hours at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, and 21:00 Asia/Ho_Chi_Minh.
-- Each run selects 1 lesson for that slot, generates 1 vertical 9:16 video, uploads a TikTok draft, then publishes the same MP4 to YouTube Shorts and Facebook Reels.
+- Each run selects 1 lesson for that slot, generates 1 vertical 9:16 video, then publishes the same MP4 to TikTok, YouTube Shorts, and Facebook Reels.
 - The content pool is sequential and skips any lesson marked with `disabled: true`, which keeps already-used lessons archived without selecting them again. The current active pool has 240 lessons, so at 8 scheduled runs per day the sequence repeats after 240 videos, or 30 days. Set `VIDEO_SERIES_START_DATE` if you want to reset where the sequence begins.
 - Uses Gemini to create a flexible `visual-plan.json` from the actual narration/caption timing, then generates one image per visual beat with Vertex AI Imagen into `assets/generated/`.
 - If generated images are disabled or unavailable, falls back to Wikimedia Commons and Openverse historical/classical image search. Set `IMAGE_HISTORICAL_SCORE` higher if you want stricter fallback filtering.
 - Optionally runs local ML subject separation with `rembg`, exports subject/shadow PNG layers, extracts SVG contours, and animates a 2.5D living-scene subject hit. If the model or dependencies are unavailable, the video generation continues without the subject effect.
 - Generates Vietnamese VieNeu narration, processes it for a louder heroic social-video mix, adds background music, and writes HyperFrames compositions.
-- Writes platform-specific viral captions and tags into `post.json`; YouTube Shorts and Facebook Reels use the caption tuned for that platform, while TikTok captions remain available for manual posting from the draft.
+- Writes platform-specific viral captions and tags into `post.json`; each publisher uses the caption tuned for that platform.
 - Renders MP4 files and uploads them as GitHub Actions artifacts.
 
 ## Local Run
@@ -61,7 +61,7 @@ Slot mapping:
 
 ## Publishing
 
-The workflow renders videos, uploads artifacts, and can publish or upload drafts when credentials are configured. Publishing is guarded by `ENABLE_SOCIAL_PUBLISH` and `PUBLISH_DRY_RUN`.
+The workflow renders videos, uploads artifacts, and can publish when credentials are configured. Publishing is guarded by `ENABLE_SOCIAL_PUBLISH` and `PUBLISH_DRY_RUN`.
 
 - Copy `.env.example` to `.env` for local testing.
 - In GitHub, add the same values as repository secrets.
@@ -70,7 +70,7 @@ The workflow renders videos, uploads artifacts, and can publish or upload drafts
 Required platform credentials:
 
 - Google Cloud / Vertex AI: `GCP_SERVICE_ACCOUNT_KEY` as a service account JSON key, plus optional `VERTEX_PROJECT_ID` and `VERTEX_LOCATION` secrets. The service account needs Vertex AI User on the project and Service Account Token Creator on itself so the workflow can mint an access token.
-- TikTok: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, and `TIKTOK_REFRESH_TOKEN` with Content Posting API access and `video.upload` scope. The script refreshes a short-lived access token at upload time and sends the video to the creator's TikTok inbox as a draft.
+- TikTok: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, and `TIKTOK_REFRESH_TOKEN` with Content Posting API access and `video.publish` scope. The script refreshes a short-lived access token at upload time and direct-posts the video with the TikTok caption/hashtags from `post.json`.
 - YouTube: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` with `youtube.upload` scope.
 - Facebook: `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN` with Page/Reels publishing permissions.
 

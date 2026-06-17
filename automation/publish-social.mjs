@@ -30,6 +30,8 @@ const requestedPlatforms = new Set(
 const TIKTOK_MIN_CHUNK_SIZE = 5 * 1024 * 1024;
 const TIKTOK_DEFAULT_CHUNK_SIZE = 10_000_000;
 const TIKTOK_MAX_FINAL_CHUNK_SIZE = 128 * 1024 * 1024;
+const TIKTOK_MAX_CAPTION_LENGTH = 2200;
+const TIKTOK_PRIVACY_LEVEL = "PUBLIC_TO_EVERYONE";
 
 function inferSlotFromUtcHour(hour) {
   const hourToSlot = {
@@ -71,6 +73,21 @@ function required(name) {
 
 function captionForPlatform(post, platform) {
   return post.captions?.[platform] || post.caption || post.title || "";
+}
+
+function hashtagsFromCaption(caption) {
+  return caption.match(/#[\p{L}\p{N}_-]+/gu) || [];
+}
+
+function validatedTikTokCaption(post) {
+  const caption = captionForPlatform(post, "tiktok").trim();
+  if (!caption) {
+    throw new Error("TikTok caption is empty. Expected post.captions.tiktok, post.caption, or post.title.");
+  }
+  if (caption.length > TIKTOK_MAX_CAPTION_LENGTH) {
+    throw new Error(`TikTok caption is too long: ${caption.length}/${TIKTOK_MAX_CAPTION_LENGTH} UTF-16 code units.`);
+  }
+  return caption;
 }
 
 async function jsonFetch(url, options = {}) {
@@ -178,6 +195,7 @@ async function discoverJobs() {
 }
 
 async function publishTikTok(job, post) {
+  const caption = validatedTikTokCaption(post);
   const accessToken = await getTikTokAccessToken();
   const video = await readFile(job.videoPath);
   const uploadPlan = tiktokUploadPlan(video.byteLength);
@@ -188,6 +206,16 @@ async function publishTikTok(job, post) {
       "content-type": "application/json; charset=UTF-8",
     },
     body: JSON.stringify({
+      post_info: {
+        title: caption,
+        privacy_level: TIKTOK_PRIVACY_LEVEL,
+        disable_duet: false,
+        disable_comment: false,
+        disable_stitch: false,
+        brand_content_toggle: false,
+        brand_organic_toggle: false,
+        is_aigc: true,
+      },
       source_info: {
         source: "FILE_UPLOAD",
         video_size: video.byteLength,
@@ -203,7 +231,7 @@ async function publishTikTok(job, post) {
 
   await uploadTikTokChunks(uploadUrl, video, uploadPlan.chunkSize, uploadPlan.totalChunkCount);
 
-  return { platform: "tiktok", mode: "draft", publishId };
+  return { platform: "tiktok", mode: "direct-post", publishId };
 }
 
 async function getYouTubeAccessToken() {
@@ -317,9 +345,16 @@ async function main() {
     }
 
     for (const platform of targetPlatforms) {
+      const caption = captionForPlatform(post, platform);
+      const hashtags = hashtagsFromCaption(caption);
       console.log(`${dryRun || !publishEnabled ? "[dry-run]" : "[publish]"} ${platform}: ${job.videoPath}`);
       console.log(`Title: ${post.title}`);
-      console.log(`Caption: ${captionForPlatform(post, platform).slice(0, 180).replace(/\s+/g, " ")}...`);
+      console.log(`Caption: ${caption.slice(0, 180).replace(/\s+/g, " ")}...`);
+      if (hashtags.length) console.log(`Hashtags (${hashtags.length}): ${hashtags.slice(0, 12).join(" ")}`);
+      if (platform === "tiktok") {
+        console.log("TikTok mode: direct-post");
+        console.log(`TikTok caption length: ${caption.trim().length}/${TIKTOK_MAX_CAPTION_LENGTH}`);
+      }
 
       if (dryRun || !publishEnabled) {
         results.push({ platform, slug: job.slug, skipped: true, reason: "dry-run-or-disabled" });
