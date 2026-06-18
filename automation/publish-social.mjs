@@ -214,7 +214,7 @@ async function publishTikTok(job, post) {
         disable_stitch: false,
         brand_content_toggle: false,
         brand_organic_toggle: false,
-        is_aigc: true,
+        is_aigc: false,
       },
       source_info: {
         source: "FILE_UPLOAD",
