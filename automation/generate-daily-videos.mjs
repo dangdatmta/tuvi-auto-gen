@@ -35,8 +35,6 @@ const slot = normalizeSlot(process.env.RUN_SLOT || inferSlotFromUtcHour(new Date
 const distribution = { id: "social", label: "TikTok / Shorts / Reels" };
 const narrationDurationMin = Number(process.env.NARRATION_DURATION_MIN || 70);
 const narrationDurationMax = Number(process.env.NARRATION_DURATION_MAX || 92);
-const scriptCharMin = Number(process.env.SCRIPT_CHAR_MIN || 1050);
-const scriptCharMax = Number(process.env.SCRIPT_CHAR_MAX || 1320);
 const visualBeatMin = Number(process.env.VISUAL_BEAT_MIN_SECONDS || 3.2);
 const visualBeatMax = Number(process.env.VISUAL_BEAT_MAX_SECONDS || 6.5);
 const visualBeatMinCount = Number(process.env.VISUAL_BEAT_MIN_COUNT || 5);
@@ -1122,7 +1120,7 @@ function geminiCopyPrompt(lesson) {
     "Yêu cầu narration:",
     "- Viết như một người từng trải đang nói với một người khác, không như bài văn mẫu.",
     "- Target 75 đến 90 giây khi đọc thành tiếng.",
-    "- Viết 12 đến 18 đoạn/câu, tổng khoảng 1050 đến 1320 ký tự.",
+    "- Viết 12 đến 18 đoạn/câu, ưu tiên tổng khoảng 1050 đến 1320 ký tự để giữ nhịp video gọn.",
     "- Đi theo arc rõ: hook đời thường, tình huống cụ thể, mâu thuẫn/cái giá, diễn giải bài học, hành động nhỏ có thể làm ngay, câu chốt nhớ lâu.",
     "- Mỗi đoạn phải nối ý với đoạn trước; đừng xếp nhiều câu cụt như khẩu hiệu.",
     "- Mở bằng một tình huống nhỏ, một nhận xét có hơi người, hoặc một câu nói thẳng.",
@@ -1560,10 +1558,6 @@ function validateScriptSegments(segments, lesson) {
   ];
   if (stiffPhrases.some((phrase) => scriptText.includes(phrase))) {
     throw new Error("Gemini script sounds too abstract/formulaic; retrying for a more human version.");
-  }
-  const totalChars = clean.join(" ").length;
-  if (totalChars < scriptCharMin || totalChars > scriptCharMax) {
-    throw new Error(`Gemini script length ${totalChars} chars is outside the expected range.`);
   }
   return clean;
 }
