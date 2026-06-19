@@ -40,6 +40,7 @@ const visualBeatMax = Number(process.env.VISUAL_BEAT_MAX_SECONDS || 6.5);
 const visualBeatMinCount = Number(process.env.VISUAL_BEAT_MIN_COUNT || 5);
 const visualBeatMaxCount = Number(process.env.VISUAL_BEAT_MAX_COUNT || 14);
 const maxNewGeminiImagesPerVideo = nonNegativeInteger(process.env.MAX_NEW_GEMINI_IMAGES_PER_VIDEO, 2);
+const imageCandidateVarietyWeight = nonNegativeNumber(process.env.IMAGE_CANDIDATE_VARIETY_WEIGHT, 3);
 const imageReusePools = (process.env.IMAGE_REUSE_POOL || "daily,assets")
   .split(",")
   .map((item) => item.trim().toLowerCase())
@@ -170,6 +171,13 @@ function nonNegativeInteger(value, fallback) {
   return Math.max(0, Math.floor(number));
 }
 
+function nonNegativeNumber(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, number);
+}
+
 function slugify(text) {
   return text
     .normalize("NFD")
@@ -285,7 +293,7 @@ function seededFraction(seed) {
 
 function candidateScore(item, lesson) {
   const seed = variantSeed(lesson, `image:${item.query}:${imageIdentity(item)}`);
-  let score = imageRank(item) + seededFraction(seed);
+  let score = imageRank(item) + seededFraction(seed) * imageCandidateVarietyWeight;
   if (item.isFallback) score -= 2;
   if (item.documentLike) score -= 25;
   if (item.usedBefore) score -= 60;
@@ -724,23 +732,68 @@ async function ensureReusablePool(lesson, visualPlan, dir) {
   })).filter((source) => existsSync(source.absolutePath));
 }
 
+async function internetImagesForReusableBeats(lesson, visualPlan, newImageIndexes, dir) {
+  const reusableBeats = visualPlan.beats
+    .map((beat, index) => ({ beat, index }))
+    .filter(({ index }) => !newImageIndexes.has(index));
+  if (!reusableBeats.length) return new Map();
+
+  const internetSources = await downloadLessonImages(lesson, dir, reusableBeats.length);
+  const timedSources = new Map();
+  for (const [sourceIndex, { beat, index }] of reusableBeats.entries()) {
+    const source = internetSources[sourceIndex % internetSources.length];
+    timedSources.set(index, {
+      ...source,
+      start: beat.start,
+      duration: beat.duration,
+      prompt: beat.prompt,
+      negativePrompt: beat.negativePrompt,
+      motion: beat.motion,
+      mood: beat.mood,
+      captionRefs: beat.captionRefs,
+      isNewGeminiImage: false,
+    });
+  }
+  return timedSources;
+}
+
+async function localReusableImagesForReusableBeats(lesson, visualPlan, newImageIndexes, dir) {
+  const reusablePool = await ensureReusablePool(lesson, visualPlan, dir);
+  const timedSources = new Map();
+  for (const [index, beat] of visualPlan.beats.entries()) {
+    if (newImageIndexes.has(index)) continue;
+    const reusable = pickReusableImage(reusablePool, lesson, beat, index);
+    if (!reusable) throw new Error("No reusable images available for non-Imagen beats.");
+    timedSources.set(index, await copyReusableImage(reusable, beat, index, dir));
+  }
+  return timedSources;
+}
+
 async function generateLessonImages(lesson, visualPlan, dir) {
   const enabled = process.env.ENABLE_GEMINI_IMAGES !== "false" && process.env.ENABLE_GEMINI_IMAGES !== "0";
   const newImageBudget = enabled ? Math.min(maxNewGeminiImagesPerVideo, visualPlan.beats.length) : 0;
   const newImageIndexes = chooseNewImageBeatIndexes(visualPlan.beats, newImageBudget);
   const reusedCount = visualPlan.beats.length - newImageIndexes.size;
-  console.log(`Gemini image budget: ${newImageIndexes.size} new image(s), ${reusedCount} reused`);
+  console.log(`Gemini image budget: ${newImageIndexes.size} new image(s), ${reusedCount} fresh internet image(s)`);
 
-  const reusablePool = reusedCount > 0 ? await ensureReusablePool(lesson, visualPlan, dir) : [];
+  let nonImagenSources = new Map();
+  if (reusedCount > 0) {
+    try {
+      nonImagenSources = await internetImagesForReusableBeats(lesson, visualPlan, newImageIndexes, dir);
+    } catch (error) {
+      console.warn(`Fresh internet images unavailable; falling back to local reusable images: ${error.message}`);
+      nonImagenSources = await localReusableImagesForReusableBeats(lesson, visualPlan, newImageIndexes, dir);
+    }
+  }
   const sources = [];
   for (const [index, beat] of visualPlan.beats.entries()) {
     if (newImageIndexes.has(index)) {
       sources.push(await generateOrReuseImagen(beat, index, dir));
       continue;
     }
-    const reusable = pickReusableImage(reusablePool, lesson, beat, index);
-    if (!reusable) throw new Error("No reusable images available for non-Imagen beats.");
-    sources.push(await copyReusableImage(reusable, beat, index, dir));
+    const internetSource = nonImagenSources.get(index);
+    if (!internetSource) throw new Error("No internet image available for non-Imagen beat.");
+    sources.push(internetSource);
   }
   return sources;
 }
@@ -803,8 +856,9 @@ async function downloadLessonImages(lesson, dir, targetCount = 7) {
   }
 
   const selected = selectDiverseImageCandidates(candidates, lesson, targetCount);
+  const minRequired = Math.min(3, targetCount);
 
-  if (selected.length < 3) {
+  if (selected.length < minRequired) {
     throw new Error(`Not enough historical image candidates for ${lesson.chapter}; found ${selected.length} from ${candidates.length} candidates`);
   }
 
@@ -832,7 +886,7 @@ async function downloadLessonImages(lesson, dir, targetCount = 7) {
     }
   }
 
-  if (sources.length < 3) {
+  if (sources.length < minRequired) {
     throw new Error(`Not enough downloadable historical images for ${lesson.chapter}; found ${sources.length}`);
   }
 

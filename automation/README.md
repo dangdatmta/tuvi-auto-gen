@@ -7,8 +7,8 @@ This folder powers the GitHub Actions workflow at `.github/workflows/daily-sun-t
 - Runs every 3 hours at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, and 21:00 Asia/Ho_Chi_Minh.
 - Each run selects 1 lesson for that slot, generates 1 vertical 9:16 video, then publishes the same MP4 to TikTok, YouTube Shorts, and Facebook Reels.
 - The content pool is sequential and skips any lesson marked with `disabled: true`, which keeps already-used lessons archived without selecting them again. The current active pool has 240 lessons, so at 8 scheduled runs per day the sequence repeats after 240 videos, or 30 days. Set `VIDEO_SERIES_START_DATE` if you want to reset where the sequence begins.
-- Uses Gemini to create a flexible `visual-plan.json` from the actual narration/caption timing, then generates one image per visual beat with Vertex AI Imagen into `assets/generated/`.
-- If generated images are disabled or unavailable, falls back to Wikimedia Commons and Openverse historical/classical image search. Set `IMAGE_HISTORICAL_SCORE` higher if you want stricter fallback filtering.
+- Uses Gemini to create a flexible `visual-plan.json` from the actual narration/caption timing, then generates up to `MAX_NEW_GEMINI_IMAGES_PER_VIDEO` Vertex AI Imagen images into `assets/generated/`.
+- Non-Imagen visual beats download fresh historical/classical images from Wikimedia Commons and Openverse into `assets/internet/`. If internet image search/download fails, the script falls back to the local `IMAGE_REUSE_POOL`. Set `IMAGE_HISTORICAL_SCORE` higher if you want stricter filtering.
 - Optionally runs local ML subject separation with `rembg`, exports subject/shadow PNG layers, extracts SVG contours, and animates a 2.5D living-scene subject hit. If the model or dependencies are unavailable, the video generation continues without the subject effect.
 - Generates Vietnamese VieNeu narration, processes it for a louder heroic social-video mix, adds background music, and writes HyperFrames compositions.
 - Writes platform-specific viral captions and tags into `post.json`; each publisher uses the caption tuned for that platform.
